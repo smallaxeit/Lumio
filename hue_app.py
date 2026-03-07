@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HueControl — Kivy touchscreen app for Raspberry Pi 4
+Lumio — Kivy touchscreen app for Raspberry Pi 4
 Room grid with on/off toggle, brightness slider, and drag-to-reorder.
 Optimised for the official 7" Pi touchscreen (800×480).
 
@@ -16,11 +16,18 @@ import os
 import platform
 import threading
 import time
+import uuid
 from datetime import datetime
 
 import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+try:
+    from supabase import create_client as _sb_create
+    _SUPABASE_LIB = True
+except ImportError:
+    _SUPABASE_LIB = False
 
 DEV_WINDOW_SIZE = (800, 480)   # set None on Pi to use display native size
 
@@ -52,6 +59,7 @@ from kivy.uix.scrollview import ScrollView
 
 SETTINGS_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hue_settings.json")
 LOG_FILE         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hue_log.jsonl")
+BACKLIGHT_PATH   = "/sys/class/backlight/rpi_backlight/brightness"
 REFRESH_INTERVAL = 10
 CARD_HEIGHT      = 82
 CARD_SPACING     = 4
@@ -142,12 +150,143 @@ def save_settings(settings: dict) -> None:
 
 # ── Event logger ───────────────────────────────────────────────────────────────
 
-_log_lock = threading.Lock()
+_log_lock           = threading.Lock()
+_logging_enabled    = True
+_huecontrol_recent  = {}   # gid → time.time() of last HueControl command
+_sse_log_recent     = {}   # gid → time.time() of last external SSE log
+
+
+def _mark_huecontrol(gid: str) -> None:
+    _huecontrol_recent[gid] = time.time()
+
+
+def _is_huecontrol_recent(gid: str, window: float = 10.0) -> bool:
+    return (time.time() - _huecontrol_recent.get(gid, 0)) < window
+
+
+def _should_log_sse(gid: str, window: float = 5.0) -> bool:
+    """True if enough time has passed since we last logged an external SSE event for this gid."""
+    now = time.time()
+    if now - _sse_log_recent.get(gid, 0) < window:
+        return False
+    _sse_log_recent[gid] = now
+    return True
+_supabase_client = None
+_outbox_wake     = threading.Event()
+_outbox_started  = False
+_on_sync_error   = None   # callable(msg) registered by RoomGrid
+
+
+def init_logging(settings: dict) -> None:
+    """Initialise logging subsystem from settings. Call once at startup."""
+    global _logging_enabled, _supabase_client, _outbox_started
+    _logging_enabled = settings.get("logging_enabled", True)
+    if not _logging_enabled:
+        return
+    _trim_log_file(settings.get("log_max_mb", 5))
+    url = settings.get("supabase_url", "")
+    key = settings.get("supabase_key", "")
+    if url and key and _SUPABASE_LIB:
+        try:
+            _supabase_client = _sb_create(url, key)
+            print("[logging] Supabase client initialised")
+        except Exception as exc:
+            print(f"[logging] Supabase init failed: {exc}")
+            _supabase_client = None
+    if _supabase_client and not _outbox_started:
+        _outbox_started = True
+        threading.Thread(target=_outbox_worker, daemon=True).start()
+
+
+def _trim_log_file(max_mb: float = 5.0) -> None:
+    """Trim oldest JSONL entries if the log file exceeds max_mb."""
+    max_bytes = int(max_mb * 1024 * 1024)
+    with _log_lock:
+        if not os.path.exists(LOG_FILE):
+            return
+        if os.path.getsize(LOG_FILE) <= max_bytes:
+            return
+        try:
+            with open(LOG_FILE) as f:
+                lines = [l for l in f if l.strip()]
+            while lines and sum(len(l.encode()) for l in lines) > max_bytes:
+                lines.pop(0)
+            with open(LOG_FILE, "w") as f:
+                f.writelines(lines)
+            print(f"[logging] log trimmed to {len(lines)} entries")
+        except Exception as exc:
+            print(f"[logging] trim failed: {exc}")
+
+
+def _outbox_worker() -> None:
+    """Background thread: drain JSONL outbox into Supabase every 60s or on wake."""
+    while True:
+        _outbox_wake.wait(timeout=60)
+        _outbox_wake.clear()
+        if _supabase_client and _logging_enabled:
+            _flush_to_supabase()
+
+
+def _flush_to_supabase() -> None:
+    """Read JSONL entries, batch-insert into Supabase, remove sent entries on success."""
+    with _log_lock:
+        if not os.path.exists(LOG_FILE):
+            return
+        try:
+            with open(LOG_FILE) as f:
+                raw_lines = [l.strip() for l in f if l.strip()]
+        except Exception:
+            return
+
+    if not raw_lines:
+        return
+
+    entries, lids = [], []
+    for line in raw_lines:
+        try:
+            e = json.loads(line)
+            lids.append(e.get("_lid"))
+            entries.append({k: v for k, v in e.items() if k != "_lid"})
+        except Exception:
+            pass
+
+    if not entries:
+        return
+
+    try:
+        _supabase_client.table("hue_log").insert(entries).execute()
+    except Exception as exc:
+        print(f"[logging] Supabase flush failed: {exc}")
+        if _on_sync_error:
+            _on_sync_error(str(exc))
+        return
+
+    sent = set(lids)
+    with _log_lock:
+        try:
+            with open(LOG_FILE) as f:
+                current = [l.strip() for l in f if l.strip()]
+            remaining = []
+            for line in current:
+                try:
+                    if json.loads(line).get("_lid") not in sent:
+                        remaining.append(line)
+                except Exception:
+                    remaining.append(line)
+            with open(LOG_FILE, "w") as f:
+                for line in remaining:
+                    f.write(line + "\n")
+        except Exception as exc:
+            print(f"[logging] JSONL cleanup failed: {exc}")
+
 
 def log_event(room: str, room_id: str, event: str, bri_pct: int,
               source: str, owner_type: str = None, ts: str = None, **extra) -> None:
     """Append one JSONL line to hue_log.jsonl (thread-safe)."""
+    if not _logging_enabled:
+        return
     entry = {
+        "_lid":    str(uuid.uuid4()),
         "ts":      ts or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         "room":    room,
         "room_id": room_id,
@@ -161,11 +300,16 @@ def log_event(room: str, room_id: str, event: str, bri_pct: int,
     with _log_lock:
         with open(LOG_FILE, "a") as f:
             f.write(json.dumps(entry) + "\n")
+    if _supabase_client:
+        _outbox_wake.set()
 
 
 def log_system(event: str, detail: str = None) -> None:
     """Append a system-level event (connect, disconnect, error, start, stop)."""
+    if not _logging_enabled:
+        return
     entry = {
+        "_lid":   str(uuid.uuid4()),
         "ts":     datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         "event":  event,
         "source": "system",
@@ -175,6 +319,8 @@ def log_system(event: str, detail: str = None) -> None:
     with _log_lock:
         with open(LOG_FILE, "a") as f:
             f.write(json.dumps(entry) + "\n")
+    if _supabase_client:
+        _outbox_wake.set()
 
 
 def rooms_ordered(groups: dict, order: list) -> list:
@@ -186,6 +332,146 @@ def rooms_ordered(groups: dict, order: list) -> list:
         if gid not in seen:
             ordered.append((gid, g))
     return ordered
+
+
+# ── Screen brightness ─────────────────────────────────────────────────────────
+
+def get_brightness() -> int:
+    """Read current backlight brightness (0–255). Returns 200 on dev machines."""
+    try:
+        with open(BACKLIGHT_PATH) as f:
+            return int(f.read().strip())
+    except Exception:
+        return 200
+
+def set_brightness(value: int) -> None:
+    """Write backlight brightness (10–255). Silent no-op on dev machines."""
+    try:
+        with open(BACKLIGHT_PATH, "w") as f:
+            f.write(str(max(10, min(255, int(value)))))
+    except Exception:
+        pass
+
+
+# ── Weather ────────────────────────────────────────────────────────────────────
+
+_WMO_CODES = {
+    0: "Clear",
+    1: "Mostly clear",   2: "Partly cloudy",        3: "Overcast",
+    45: "Foggy",         48: "Icy fog",
+    51: "Light drizzle", 53: "Drizzle",              55: "Heavy drizzle",
+    61: "Light rain",    63: "Rain",                 65: "Heavy rain",
+    71: "Light snow",    73: "Snow",                 75: "Heavy snow",    77: "Sleet",
+    80: "Showers",       81: "Rain showers",         82: "Heavy showers",
+    85: "Snow showers",  86: "Heavy snow showers",
+    95: "Thunderstorm",  96: "Thunderstorm + hail",  99: "Heavy thunderstorm",
+}
+
+_WMO_SHORT = {
+    0: "Clear",      1: "Mostly Clr", 2: "P. Cloudy",  3: "Overcast",
+    45: "Foggy",     48: "Icy Fog",
+    51: "Drizzle",   53: "Drizzle",   55: "Drizzle",
+    61: "Lt. Rain",  63: "Rain",      65: "Rain",
+    71: "Lt. Snow",  73: "Snow",      75: "Snow",      77: "Sleet",
+    80: "Showers",   81: "Showers",   82: "Showers",
+    85: "Sn Shower", 86: "Sn Shower",
+    95: "T-Storm",   96: "T-Storm",   99: "T-Storm",
+}
+
+def _fetch_weather(lat: float, lon: float) -> dict:
+    """Return weather dict with current + 5-day forecast, or None on error."""
+    try:
+        url = (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lat}&longitude={lon}"
+            "&current_weather=true"
+            "&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max"
+            "&temperature_unit=fahrenheit&wind_speed_unit=mph"
+            "&timezone=auto&forecast_days=6"
+        )
+        r = requests.get(url, timeout=8)
+        r.raise_for_status()
+        body = r.json()
+        cw   = body["current_weather"]
+        temp = round(cw["temperature"])
+        code = int(cw["weathercode"])
+        cond = _WMO_CODES.get(code, "")
+
+        daily = []
+        d = body.get("daily", {})
+        precip_list = d.get("precipitation_probability_max", [])
+        for i, date_str in enumerate(d.get("time", [])):
+            wcode  = int(d["weathercode"][i])
+            precip = int(precip_list[i]) if i < len(precip_list) and precip_list[i] is not None else 0
+            daily.append({
+                "date":       date_str,
+                "day":        datetime.fromisoformat(date_str).strftime("%a"),
+                "high":       round(d["temperature_2m_max"][i]),
+                "low":        round(d["temperature_2m_min"][i]),
+                "condition":  _WMO_CODES.get(wcode, ""),
+                "cond_short": _WMO_SHORT.get(wcode, ""),
+                "precip_pct": precip,
+            })
+
+        return {
+            "label":     f"{temp}°F  {cond}" if cond else f"{temp}°F",
+            "temp":      temp,
+            "condition": cond,
+            "wind_mph":  round(cw["windspeed"]),
+            "daily":     daily,
+        }
+    except Exception:
+        return None
+
+def _fetch_hourly(lat: float, lon: float, date_str: str) -> list:
+    """Fetch hourly forecast for a single date (6am–10pm). Returns list of dicts or None."""
+    try:
+        url = (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lat}&longitude={lon}"
+            "&hourly=temperature_2m,weathercode,precipitation_probability,windspeed_10m"
+            "&temperature_unit=fahrenheit&wind_speed_unit=mph"
+            f"&timezone=auto&start_date={date_str}&end_date={date_str}"
+        )
+        r = requests.get(url, timeout=8)
+        r.raise_for_status()
+        h = r.json()["hourly"]
+        precip_list = h.get("precipitation_probability", [])
+        hours = []
+        for i, ts in enumerate(h.get("time", [])):
+            dt     = datetime.fromisoformat(ts)
+            precip = int(precip_list[i]) if i < len(precip_list) and precip_list[i] is not None else 0
+            hours.append({
+                "hour":       dt.hour,
+                "time":       dt.strftime("%I %p").lstrip("0"),
+                "temp":       round(h["temperature_2m"][i]),
+                "condition":  _WMO_CODES.get(int(h["weathercode"][i]), ""),
+                "precip_pct": precip,
+                "wind_mph":   round(h["windspeed_10m"][i]),
+            })
+        return hours
+    except Exception:
+        return None
+
+
+def _resolve_location(settings: dict) -> tuple:
+    """Return (lat, lon) from saved settings or IP geolocation. Updates settings in-place."""
+    if settings.get("latitude") and settings.get("longitude"):
+        return float(settings["latitude"]), float(settings["longitude"])
+    try:
+        r = requests.get("http://ip-api.com/json", timeout=6)
+        r.raise_for_status()
+        data = r.json()
+        if data.get("status") == "success":
+            lat, lon = data["lat"], data["lon"]
+            settings["latitude"]  = lat
+            settings["longitude"] = lon
+            settings["city"]      = data.get("city", "")
+            save_settings(settings)
+            return lat, lon
+    except Exception:
+        pass
+    return None, None
 
 
 # ── Hue API wrapper ───────────────────────────────────────────────────────────
@@ -375,11 +661,12 @@ class LightRow(BoxLayout):
         threading.Thread(target=self._send_toggle, args=(new_state,), daemon=True).start()
 
     def _send_toggle(self, new_state: bool):
+        _mark_huecontrol(self._room_id)
         try:
             self.api.set_light_on(self.light_id, new_state)
             log_event(self._room_name, self._room_id,
                       "on" if new_state else "off",
-                      round(self._bri / 254 * 100), "HueControl",
+                      round(self._bri / 254 * 100), "lumio",
                       light=self._name, light_id=self.light_id)
         except Exception as exc:
             print(f"[{self._name}] toggle error: {exc}")
@@ -403,10 +690,11 @@ class LightRow(BoxLayout):
         )
 
     def _send_brightness(self, bri: int):
+        _mark_huecontrol(self._room_id)
         try:
             self.api.set_light_brightness(self.light_id, bri)
             log_event(self._room_name, self._room_id,
-                      "brightness", round(bri / 254 * 100), "HueControl",
+                      "brightness", round(bri / 254 * 100), "lumio",
                       light=self._name, light_id=self.light_id)
             if not self._is_on:
                 self._apply_on_state(True)
@@ -646,6 +934,22 @@ class RoomCard(BoxLayout):
         self._bg_rect.pos  = self.pos
         self._bg_rect.size = self.size
 
+    def turn_off(self):
+        """Called by All Off — turns off this room if it's currently on."""
+        if not self._is_on:
+            return
+        self._apply_on_state(False)
+        threading.Thread(target=self._send_off, daemon=True).start()
+
+    def _send_off(self):
+        _mark_huecontrol(self.group_id)
+        try:
+            self.api.set_group_on(self.group_id, False)
+            log_event(self._room_name, self.group_id, "off", 0, "lumio")
+        except Exception as exc:
+            print(f"[{self._room_name}] all-off error: {exc}")
+            Clock.schedule_once(lambda _: self._apply_on_state(True), 0)
+
     # ── long-press → room detail ──────────────────────────────────────────────
 
     def on_touch_down(self, touch):
@@ -709,11 +1013,12 @@ class RoomCard(BoxLayout):
         ).start()
 
     def _send_toggle(self, new_state: bool):
+        _mark_huecontrol(self.group_id)
         try:
             self.api.set_group_on(self.group_id, new_state)
             log_event(self._room_name, self.group_id,
                       "on" if new_state else "off",
-                      round(self._bri / 254 * 100), "HueControl")
+                      round(self._bri / 254 * 100), "lumio")
         except Exception as exc:
             print(f"[{self._room_name}] toggle error: {exc}")
             log_system("error", f"room toggle {self._room_name} ({self.group_id}): {exc}")
@@ -738,10 +1043,11 @@ class RoomCard(BoxLayout):
         )
 
     def _send_brightness(self, bri: int):
+        _mark_huecontrol(self.group_id)
         try:
             self.api.set_group_brightness(self.group_id, bri)
             log_event(self._room_name, self.group_id,
-                      "brightness", round(bri / 254 * 100), "HueControl")
+                      "brightness", round(bri / 254 * 100), "lumio")
             if not self._is_on:
                 self._apply_on_state(True)
         except Exception as exc:
@@ -792,15 +1098,23 @@ class SettingsPopup(ModalView):
 
     ROW_HEIGHT = 54
 
-    def __init__(self, all_rooms: list, hidden_rooms: set, on_save, **kwargs):
+    def __init__(self, all_rooms: list, hidden_rooms: set, on_save,
+                 brightness: int = 200, show_weather: bool = True,
+                 logging_enabled: bool = True, show_sync_errors: bool = True,
+                 exempt_rooms: set = None, **kwargs):
         super().__init__(
             background_color=(0, 0, 0, 0.55),
-            size_hint=(0.90, 0.88),
+            size_hint=(0.90, 0.92),
             **kwargs,
         )
-        self._on_save = on_save
-        self._visible = {gid: gid not in hidden_rooms for gid, _ in all_rooms}
-        self._rows    = {}   # gid → (bg_color_inst, check_lbl, name_lbl)
+        self._on_save          = on_save
+        self._visible          = {gid: gid not in hidden_rooms for gid, _ in all_rooms}
+        self._included         = {gid: gid not in (exempt_rooms or set()) for gid, _ in all_rooms}
+        self._rows             = {}   # gid → (bg, show_check, name_lbl, alloff_check)
+        self._show_weather     = show_weather
+        self._logging_enabled  = logging_enabled
+        self._show_sync_errors = show_sync_errors
+        self._adv_open         = False
 
         card = BoxLayout(orientation='vertical', padding=[14, 12, 14, 12], spacing=8)
         with card.canvas.before:
@@ -814,7 +1128,7 @@ class SettingsPopup(ModalView):
         # Header
         hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=44)
         hdr.add_widget(Label(
-            text="Displayed Rooms",
+            text="Settings",
             font_size="18sp",
             bold=True,
             color=C_TEXT,
@@ -834,15 +1148,210 @@ class SettingsPopup(ModalView):
         hdr.add_widget(close_btn)
         card.add_widget(hdr)
 
-        # Room list
+        # Single scrollable content area (everything except header + done button)
         scroll = ScrollView(do_scroll_x=False, bar_width=4)
+        inner = GridLayout(cols=1, spacing=8, size_hint_y=None)
+        inner.bind(minimum_height=inner.setter('height'))
+
+        # Brightness
+        bri_lbl = Label(
+            text="Screen Brightness",
+            font_size="14sp",
+            bold=True,
+            color=C_SUBTEXT,
+            halign="left",
+            size_hint_y=None,
+            height=26,
+        )
+        bri_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
+        inner.add_widget(bri_lbl)
+
+        bri_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=38, spacing=6)
+        self._bri_slider = Slider(min=10, max=255, value=brightness, cursor_size=(22, 22))
+        self._bri_pct    = Label(
+            text=f"{round(brightness / 255 * 100)}%",
+            font_size="13sp",
+            color=C_SUBTEXT,
+            size_hint=(None, 1),
+            width=44,
+        )
+        self._bri_slider.bind(value=self._on_bri_change)
+        bri_row.add_widget(self._bri_slider)
+        bri_row.add_widget(self._bri_pct)
+        inner.add_widget(bri_row)
+
+        # Weather toggle
+        wx_row = _TappableRow(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=self.ROW_HEIGHT,
+            padding=[12, 0, 12, 0],
+            spacing=10,
+        )
+        with wx_row.canvas.before:
+            self._wx_bg   = Color(*(C_CARD_ON if show_weather else C_CARD_OFF))
+            wx_rect       = RoundedRectangle(radius=[8], pos=wx_row.pos, size=wx_row.size)
+        wx_row.bind(
+            pos=lambda w, _: setattr(wx_rect, 'pos', w.pos),
+            size=lambda w, _: setattr(wx_rect, 'size', w.size),
+            on_release=lambda _: self._toggle_weather(),
+        )
+        self._wx_name = Label(
+            text="Show Weather",
+            font_size="15sp", bold=True,
+            color=C_TEXT if show_weather else C_SUBTEXT,
+            halign='left', valign='middle',
+        )
+        self._wx_name.bind(size=lambda w, _: setattr(w, 'text_size', (w.width, None)))
+        self._wx_check = Label(
+            text="✓" if show_weather else "",
+            font_name=SYMBOL_FONT or 'Roboto',
+            font_size="18sp", bold=True, color=C_BTN_ON,
+            size_hint=(None, 1), width=36,
+            halign='center', valign='middle',
+        )
+        wx_row.add_widget(self._wx_name)
+        wx_row.add_widget(self._wx_check)
+        inner.add_widget(wx_row)
+
+        # Advanced: wrapper holds header + content; expands by add/remove of content
+        self._adv_wrapper = BoxLayout(
+            orientation='vertical',
+            size_hint_y=None,
+            height=36,
+            spacing=4,
+        )
+
+        adv_hdr = _TappableRow(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=36,
+            padding=[12, 0, 12, 0],
+        )
+        with adv_hdr.canvas.before:
+            Color(*C_CARD_OFF)
+            adv_hdr_rect = RoundedRectangle(radius=[8], pos=adv_hdr.pos, size=adv_hdr.size)
+        adv_hdr.bind(
+            pos=lambda w, _: setattr(adv_hdr_rect, 'pos', w.pos),
+            size=lambda w, _: setattr(adv_hdr_rect, 'size', w.size),
+            on_release=lambda _: self._toggle_advanced(),
+        )
+        self._adv_lbl = Label(
+            text="▸  Advanced",
+            font_size="13sp", bold=True,
+            color=C_SUBTEXT,
+            halign='left', valign='middle',
+        )
+        self._adv_lbl.bind(size=lambda w, _: setattr(w, 'text_size', (w.width, None)))
+        adv_hdr.add_widget(self._adv_lbl)
+        self._adv_wrapper.add_widget(adv_hdr)
+
+        # Advanced content — built now, added to wrapper only when expanded
+        _row_h = self.ROW_HEIGHT
+        self._adv_content = BoxLayout(
+            orientation='vertical',
+            size_hint_y=None,
+            height=_row_h * 2 + 4,
+            spacing=4,
+        )
+
+        # Enable Logging toggle
+        log_row = _TappableRow(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=_row_h,
+            padding=[12, 0, 12, 0],
+            spacing=10,
+        )
+        with log_row.canvas.before:
+            self._log_bg = Color(*(C_CARD_ON if logging_enabled else C_CARD_OFF))
+            log_rect     = RoundedRectangle(radius=[8], pos=log_row.pos, size=log_row.size)
+        log_row.bind(
+            pos=lambda w, _: setattr(log_rect, 'pos', w.pos),
+            size=lambda w, _: setattr(log_rect, 'size', w.size),
+            on_release=lambda _: self._toggle_logging(),
+        )
+        self._log_name = Label(
+            text="Enable Logging",
+            font_size="15sp", bold=True,
+            color=C_TEXT if logging_enabled else C_SUBTEXT,
+            halign='left', valign='middle',
+        )
+        self._log_name.bind(size=lambda w, _: setattr(w, 'text_size', (w.width, None)))
+        self._log_check = Label(
+            text="✓" if logging_enabled else "",
+            font_name=SYMBOL_FONT or 'Roboto',
+            font_size="18sp", bold=True, color=C_BTN_ON,
+            size_hint=(None, 1), width=36,
+            halign='center', valign='middle',
+        )
+        log_row.add_widget(self._log_name)
+        log_row.add_widget(self._log_check)
+        self._adv_content.add_widget(log_row)
+
+        # Show sync errors toggle
+        sync_row = _TappableRow(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=_row_h,
+            padding=[12, 0, 12, 0],
+            spacing=10,
+        )
+        with sync_row.canvas.before:
+            self._sync_bg = Color(*(C_CARD_ON if show_sync_errors else C_CARD_OFF))
+            sync_rect     = RoundedRectangle(radius=[8], pos=sync_row.pos, size=sync_row.size)
+        sync_row.bind(
+            pos=lambda w, _: setattr(sync_rect, 'pos', w.pos),
+            size=lambda w, _: setattr(sync_rect, 'size', w.size),
+            on_release=lambda _: self._toggle_sync_errors(),
+        )
+        self._sync_name = Label(
+            text="Show Sync Errors",
+            font_size="15sp", bold=True,
+            color=C_TEXT if show_sync_errors else C_SUBTEXT,
+            halign='left', valign='middle',
+        )
+        self._sync_name.bind(size=lambda w, _: setattr(w, 'text_size', (w.width, None)))
+        self._sync_check = Label(
+            text="✓" if show_sync_errors else "",
+            font_name=SYMBOL_FONT or 'Roboto',
+            font_size="18sp", bold=True, color=C_BTN_ON,
+            size_hint=(None, 1), width=36,
+            halign='center', valign='middle',
+        )
+        sync_row.add_widget(self._sync_name)
+        sync_row.add_widget(self._sync_check)
+        self._adv_content.add_widget(sync_row)
+
+        inner.add_widget(self._adv_wrapper)
+
+        # Displayed Rooms header row with column labels
+        rooms_hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=26)
+        rooms_main_lbl = Label(
+            text="Displayed Rooms",
+            font_size="14sp", bold=True,
+            color=C_SUBTEXT,
+            halign="left", valign="middle",
+        )
+        rooms_main_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
+        rooms_hdr.add_widget(rooms_main_lbl)
+        rooms_hdr.add_widget(Label(
+            text="Show", font_size="11sp", color=C_SUBTEXT,
+            halign="center", size_hint=(None, 1), width=44,
+        ))
+        rooms_hdr.add_widget(Label(
+            text="All Off", font_size="11sp", color=C_SUBTEXT,
+            halign="center", size_hint=(None, 1), width=44,
+        ))
+        inner.add_widget(rooms_hdr)
+
         room_list = GridLayout(cols=1, spacing=CARD_SPACING, size_hint_y=None)
         room_list.bind(minimum_height=room_list.setter('height'))
-
         for gid, group in all_rooms:
             room_list.add_widget(self._make_row(gid, group.get('name', 'Room')))
+        inner.add_widget(room_list)
 
-        scroll.add_widget(room_list)
+        scroll.add_widget(inner)
         card.add_widget(scroll)
 
         # Done button
@@ -863,13 +1372,15 @@ class SettingsPopup(ModalView):
         self.add_widget(card)
 
     def _make_row(self, gid, name):
-        visible = self._visible[gid]
-        row = _TappableRow(
+        visible  = self._visible[gid]
+        included = self._included[gid]
+
+        row = BoxLayout(
             orientation='horizontal',
             size_hint_y=None,
             height=self.ROW_HEIGHT,
-            padding=[12, 0, 12, 0],
-            spacing=10,
+            padding=[12, 0, 4, 0],
+            spacing=0,
         )
         with row.canvas.before:
             bg = Color(*(C_CARD_ON if visible else C_CARD_OFF))
@@ -877,57 +1388,350 @@ class SettingsPopup(ModalView):
         row.bind(
             pos=lambda w, _: setattr(rect, 'pos', w.pos),
             size=lambda w, _: setattr(rect, 'size', w.size),
-            on_release=lambda inst, g=gid: self._toggle(g),
         )
 
         name_lbl = Label(
             text=name,
-            font_size="15sp",
-            bold=True,
+            font_size="15sp", bold=True,
             color=C_TEXT if visible else C_SUBTEXT,
-            halign='left',
-            valign='middle',
+            halign='left', valign='middle',
         )
         name_lbl.bind(size=lambda w, _: setattr(w, 'text_size', (w.width, None)))
 
-        check_lbl = Label(
+        show_cell = _TappableRow(size_hint=(None, 1), width=44)
+        show_cell.bind(on_release=lambda inst, g=gid: self._toggle_show(g))
+        show_check = Label(
             text="✓" if visible else "",
             font_name=SYMBOL_FONT or 'Roboto',
-            font_size="18sp",
-            bold=True,
-            color=C_BTN_ON,
-            size_hint=(None, 1),
-            width=36,
-            halign='center',
-            valign='middle',
+            font_size="18sp", bold=True, color=C_BTN_ON,
+            halign='center', valign='middle',
         )
+        show_cell.add_widget(show_check)
+
+        alloff_cell = _TappableRow(size_hint=(None, 1), width=44)
+        alloff_cell.bind(on_release=lambda inst, g=gid: self._toggle_alloff(g))
+        alloff_check = Label(
+            text="✓" if included else "",
+            font_name=SYMBOL_FONT or 'Roboto',
+            font_size="18sp", bold=True, color=C_BTN_ON,
+            halign='center', valign='middle',
+        )
+        alloff_cell.add_widget(alloff_check)
 
         row.add_widget(name_lbl)
-        row.add_widget(check_lbl)
+        row.add_widget(show_cell)
+        row.add_widget(alloff_cell)
 
-        self._rows[gid] = (bg, check_lbl, name_lbl)
+        self._rows[gid] = (bg, show_check, name_lbl, alloff_check)
         return row
 
-    def _toggle(self, gid):
+    def _toggle_show(self, gid):
         self._visible[gid] = not self._visible[gid]
         visible = self._visible[gid]
-        bg, check_lbl, name_lbl = self._rows[gid]
-        bg.rgba          = C_CARD_ON if visible else C_CARD_OFF
-        check_lbl.text   = "✓" if visible else ""
-        name_lbl.color   = C_TEXT if visible else C_SUBTEXT
+        bg, show_check, name_lbl, alloff_check = self._rows[gid]
+        bg.rgba         = C_CARD_ON if visible else C_CARD_OFF
+        show_check.text = "✓" if visible else ""
+        name_lbl.color  = C_TEXT if visible else C_SUBTEXT
+
+    def _toggle_alloff(self, gid):
+        self._included[gid] = not self._included[gid]
+        self._rows[gid][3].text = "✓" if self._included[gid] else ""
+
+    def _on_bri_change(self, _, value):
+        self._bri_pct.text = f"{round(value / 255 * 100)}%"
+        set_brightness(int(value))
+
+    def _toggle_weather(self):
+        self._show_weather     = not self._show_weather
+        self._wx_bg.rgba       = C_CARD_ON if self._show_weather else C_CARD_OFF
+        self._wx_check.text    = "✓" if self._show_weather else ""
+        self._wx_name.color    = C_TEXT if self._show_weather else C_SUBTEXT
+
+    def _toggle_advanced(self):
+        self._adv_open = not self._adv_open
+        if self._adv_open:
+            self._adv_wrapper.add_widget(self._adv_content)
+            self._adv_wrapper.height = 36 + 4 + self._adv_content.height
+            self._adv_lbl.text = "▾  Advanced"
+        else:
+            self._adv_wrapper.remove_widget(self._adv_content)
+            self._adv_wrapper.height = 36
+            self._adv_lbl.text = "▸  Advanced"
+
+    def _toggle_logging(self):
+        self._logging_enabled  = not self._logging_enabled
+        self._log_bg.rgba      = C_CARD_ON if self._logging_enabled else C_CARD_OFF
+        self._log_check.text   = "✓" if self._logging_enabled else ""
+        self._log_name.color   = C_TEXT if self._logging_enabled else C_SUBTEXT
+
+    def _toggle_sync_errors(self):
+        self._show_sync_errors = not self._show_sync_errors
+        self._sync_bg.rgba     = C_CARD_ON if self._show_sync_errors else C_CARD_OFF
+        self._sync_check.text  = "✓" if self._show_sync_errors else ""
+        self._sync_name.color  = C_TEXT if self._show_sync_errors else C_SUBTEXT
 
     def _save_and_close(self, *_):
         hidden = {gid for gid, vis in self._visible.items() if not vis}
-        self._on_save(hidden)
+        exempt = {gid for gid, inc in self._included.items() if not inc}
+        self._on_save(hidden, int(self._bri_slider.value), self._show_weather,
+                      self._logging_enabled, self._show_sync_errors, exempt)
         self.dismiss()
+
+
+# ── WeatherModal ──────────────────────────────────────────────────────────────
+
+class WeatherModal(ModalView):
+    """Full weather detail card — always dark navy regardless of app theme."""
+
+    _BG      = (0.07, 0.10, 0.20, 1)   # deep navy overlay tint
+    _CARD    = (0.10, 0.14, 0.26, 1)   # card background
+    _TEMP    = (0.95, 0.75, 0.25, 1)   # amber/gold — current temp
+    _TEXT    = (0.92, 0.94, 1.00, 1)   # near-white text
+    _SUB     = (0.52, 0.60, 0.82, 1)   # muted blue-grey subtext
+    _DAY_BG  = (0.13, 0.18, 0.32, 1)   # day column background
+
+    def __init__(self, data: dict, city: str, lat=None, lon=None, **kwargs):
+        super().__init__(
+            background_color=(0, 0, 0, 0.70),
+            size_hint=(0.85, 0.82),
+            **kwargs,
+        )
+        self._lat = lat
+        self._lon = lon
+
+        card = BoxLayout(orientation='vertical', padding=[20, 16, 20, 16], spacing=10)
+        with card.canvas.before:
+            Color(*self._CARD)
+            c_rect = RoundedRectangle(radius=[20], pos=card.pos, size=card.size)
+        card.bind(
+            pos=lambda *_: setattr(c_rect, 'pos', card.pos),
+            size=lambda *_: setattr(c_rect, 'size', card.size),
+        )
+
+        # ── header row: city + close ─────────────────────────────────────────
+        hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=36)
+        city_lbl = Label(
+            text=city or "Weather",
+            font_size="16sp", bold=True,
+            color=self._TEXT,
+            halign="left", valign="middle",
+        )
+        city_lbl.bind(size=lambda w, _: setattr(w, 'text_size', (w.width, None)))
+        close_btn = Button(
+            text="×", font_size="22sp",
+            size_hint=(None, 1), width=40,
+            background_normal="", background_down="",
+            background_color=(0, 0, 0, 0),
+            color=self._SUB,
+        )
+        close_btn.bind(on_release=lambda _: self.dismiss())
+        hdr.add_widget(city_lbl)
+        hdr.add_widget(close_btn)
+        card.add_widget(hdr)
+
+        # ── current temp (big) ───────────────────────────────────────────────
+        card.add_widget(Label(
+            text=f"{data['temp']}°F",
+            font_size="68sp", bold=True,
+            color=self._TEMP,
+            size_hint_y=None, height=90,
+        ))
+
+        # ── condition ────────────────────────────────────────────────────────
+        card.add_widget(Label(
+            text=data['condition'],
+            font_size="20sp",
+            color=self._TEXT,
+            size_hint_y=None, height=30,
+        ))
+
+        # ── wind ─────────────────────────────────────────────────────────────
+        card.add_widget(Label(
+            text=f"Wind  {data['wind_mph']} mph",
+            font_size="14sp",
+            color=self._SUB,
+            size_hint_y=None, height=22,
+        ))
+
+        # ── spacer ───────────────────────────────────────────────────────────
+        card.add_widget(BoxLayout(size_hint_y=None, height=6))
+
+        # ── 5-day forecast row (skip index 0 = today) ────────────────────────
+        forecast = GridLayout(cols=5, size_hint_y=None, height=114, spacing=6)
+        for day in data['daily'][1:6]:
+            col = _DayCol(orientation='vertical', spacing=2, padding=[0, 6, 0, 6])
+            with col.canvas.before:
+                Color(*self._DAY_BG)
+                d_rect = RoundedRectangle(radius=[8], pos=col.pos, size=col.size)
+            col.bind(
+                pos=lambda w, _, r=d_rect: setattr(r, 'pos', w.pos),
+                size=lambda w, _, r=d_rect: setattr(r, 'size', w.size),
+            )
+            if self._lat and self._lon:
+                col.bind(on_release=lambda inst, d=day: self._open_day_detail(d))
+            cond_text = day['cond_short']
+            if day.get('precip_pct', 0) > 0:
+                cond_text += f"  {day['precip_pct']}%"
+            col.add_widget(Label(text=day['day'],        font_size="12sp", bold=True, color=self._SUB))
+            col.add_widget(Label(text=cond_text,         font_size="11sp",            color=self._TEXT))
+            col.add_widget(Label(text=f"{day['high']}°", font_size="15sp", bold=True, color=self._TEMP))
+            col.add_widget(Label(text=f"{day['low']}°",  font_size="12sp",            color=self._SUB))
+            forecast.add_widget(col)
+        card.add_widget(forecast)
+
+        self.add_widget(card)
+
+    def _open_day_detail(self, day: dict):
+        DayDetailModal(
+            day_name=day['day'],
+            date_str=day['date'],
+            lat=self._lat,
+            lon=self._lon,
+        ).open()
+
+
+class _DayCol(ButtonBehavior, BoxLayout):
+    """Tappable day column in the weather forecast grid."""
+
+
+# ── DayDetailModal ─────────────────────────────────────────────────────────────
+
+class DayDetailModal(ModalView):
+    """Hourly forecast for a tapped day — dark navy, same style as WeatherModal."""
+
+    _CARD   = (0.10, 0.14, 0.26, 1)
+    _TEMP   = (0.95, 0.75, 0.25, 1)
+    _TEXT   = (0.92, 0.94, 1.00, 1)
+    _SUB    = (0.52, 0.60, 0.82, 1)
+    _ROW_A  = (0.12, 0.17, 0.30, 1)
+    _ROW_B  = (0.09, 0.13, 0.24, 1)
+    _PRECIP = (0.45, 0.70, 1.00, 1)
+    ROW_H   = 44
+
+    def __init__(self, day_name: str, date_str: str, lat: float, lon: float, **kwargs):
+        super().__init__(
+            background_color=(0, 0, 0, 0.80),
+            size_hint=(0.85, 0.88),
+            **kwargs,
+        )
+        self._lat      = lat
+        self._lon      = lon
+        self._date_str = date_str
+
+        card = BoxLayout(orientation='vertical', padding=[20, 16, 20, 16], spacing=10)
+        with card.canvas.before:
+            Color(*self._CARD)
+            c_rect = RoundedRectangle(radius=[20], pos=card.pos, size=card.size)
+        card.bind(
+            pos=lambda *_: setattr(c_rect, 'pos', card.pos),
+            size=lambda *_: setattr(c_rect, 'size', card.size),
+        )
+
+        # ── header ───────────────────────────────────────────────────────────
+        hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=36)
+        dt = datetime.fromisoformat(date_str)
+        date_lbl = Label(
+            text=f"{dt.strftime('%A')}  ·  {dt.strftime('%b')} {dt.day}",
+            font_size="16sp", bold=True,
+            color=self._TEXT,
+            halign="left", valign="middle",
+        )
+        date_lbl.bind(size=lambda w, _: setattr(w, 'text_size', (w.width, None)))
+        close_btn = Button(
+            text="×", font_size="22sp",
+            size_hint=(None, 1), width=40,
+            background_normal="", background_down="",
+            background_color=(0, 0, 0, 0),
+            color=self._SUB,
+        )
+        close_btn.bind(on_release=lambda _: self.dismiss())
+        hdr.add_widget(date_lbl)
+        hdr.add_widget(close_btn)
+        card.add_widget(hdr)
+
+        # ── content: loading → hourly rows ───────────────────────────────────
+        self._content = BoxLayout(orientation='vertical')
+        self._content.add_widget(Label(
+            text="Loading…", font_size="16sp", color=self._SUB,
+        ))
+        card.add_widget(self._content)
+        self.add_widget(card)
+
+        threading.Thread(target=self._do_fetch, daemon=True).start()
+
+    def _do_fetch(self):
+        self._populate(_fetch_hourly(self._lat, self._lon, self._date_str))
+
+    @mainthread
+    def _populate(self, hours):
+        self._content.clear_widgets()
+        if not hours:
+            self._content.add_widget(Label(
+                text="Could not load forecast.", font_size="15sp", color=self._SUB,
+            ))
+            return
+
+        scroll   = ScrollView(do_scroll_x=False, bar_width=4)
+        row_list = GridLayout(cols=1, size_hint_y=None, spacing=3)
+        row_list.bind(minimum_height=row_list.setter('height'))
+
+        for i, h in enumerate([x for x in hours if 6 <= x['hour'] <= 22]):
+            row = BoxLayout(
+                orientation='horizontal',
+                size_hint_y=None, height=self.ROW_H,
+                padding=[10, 0, 10, 0], spacing=8,
+            )
+            with row.canvas.before:
+                Color(*(self._ROW_A if i % 2 == 0 else self._ROW_B))
+                r_rect = RoundedRectangle(radius=[6], pos=row.pos, size=row.size)
+            row.bind(
+                pos=lambda w, _, r=r_rect: setattr(r, 'pos', w.pos),
+                size=lambda w, _, r=r_rect: setattr(r, 'size', w.size),
+            )
+            row.add_widget(Label(
+                text=h['time'], font_size="13sp", bold=True, color=self._SUB,
+                size_hint=(None, 1), width=64, text_size=(64, None),
+                halign="left", valign="middle",
+            ))
+            row.add_widget(Label(
+                text=f"{h['temp']}°F", font_size="14sp", bold=True, color=self._TEMP,
+                size_hint=(None, 1), width=62, text_size=(62, None),
+                halign="left", valign="middle",
+            ))
+            cond_lbl = Label(
+                text=h['condition'], font_size="13sp", color=self._TEXT,
+                size_hint_x=1, halign="left", valign="middle",
+            )
+            cond_lbl.bind(size=lambda w, _: setattr(w, 'text_size', (w.width, None)))
+            row.add_widget(cond_lbl)
+            row.add_widget(Label(
+                text=f"{h['precip_pct']}%" if h.get('precip_pct', 0) > 0 else "",
+                font_size="13sp", color=self._PRECIP,
+                size_hint=(None, 1), width=46, text_size=(46, None),
+                halign="right", valign="middle",
+            ))
+            row.add_widget(Label(
+                text=f"{h['wind_mph']} mph", font_size="12sp", color=self._SUB,
+                size_hint=(None, 1), width=58, text_size=(58, None),
+                halign="right", valign="middle",
+            ))
+            row_list.add_widget(row)
+
+        scroll.add_widget(row_list)
+        self._content.add_widget(scroll)
+
+
+class _WeatherBtn(ButtonBehavior, Label):
+    """Tappable Label — fires on_release when tapped."""
 
 
 # ── HeaderBar ─────────────────────────────────────────────────────────────────
 
 class HeaderBar(BoxLayout):
-    """Top bar: spacer | Settings | Edit | Theme icon."""
+    """Top bar: clock | weather/status | Settings | Edit | Theme icon."""
 
-    def __init__(self, on_edit_toggle, on_theme_toggle, on_settings_open, **kwargs):
+    def __init__(self, on_edit_toggle, on_theme_toggle, on_settings_open,
+                 on_weather_tap=None, on_all_off=None, **kwargs):
         super().__init__(
             orientation="horizontal",
             size_hint_y=None,
@@ -941,16 +1745,52 @@ class HeaderBar(BoxLayout):
             self._rect = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self._upd, size=self._upd)
 
-        self.time_lbl = Label(
+        self._weather_text  = ""    # last known weather string
+        self._status_revert = None  # pending Clock event to restore weather after status
+        self._lp_event      = None  # long-press timer for clock exit
+        self._lp_touch_uid  = None
+
+        self.clock_lbl = Label(
+            text=self._now_str(),
+            font_size="14sp",
+            color=C_SUBTEXT,
+            halign="right",
+            valign="middle",
+            size_hint=(None, 0.85),
+            width=88,
+        )
+        self.clock_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
+        self.add_widget(self.clock_lbl)
+
+        if on_all_off:
+            self.alloff_btn = Button(
+                text="⏻",
+                font_name=SYMBOL_FONT or 'Roboto',
+                font_size="20sp",
+                size_hint=(None, 0.85),
+                width=46,
+                background_normal="",
+                background_down="",
+                background_color=(0, 0, 0, 0),
+                color=C_SUBTEXT,
+            )
+            self.alloff_btn.bind(on_release=lambda _: on_all_off())
+            self.add_widget(self.alloff_btn)
+        else:
+            self.alloff_btn = None
+
+        self.weather_lbl = _WeatherBtn(
             text="",
             font_size="13sp",
             color=C_SUBTEXT,
-            halign="left",
+            halign="right",
             valign="middle",
-            size_hint_x=1,
+            size_hint=(1, 0.85),
         )
-        self.time_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
-        self.add_widget(self.time_lbl)
+        self.weather_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
+        if on_weather_tap:
+            self.weather_lbl.bind(on_release=lambda _: on_weather_tap())
+        self.add_widget(self.weather_lbl)
 
         self.settings_btn = Button(
             text="⚙",
@@ -995,13 +1835,55 @@ class HeaderBar(BoxLayout):
         self.add_widget(self.edit_btn)
         self.add_widget(self.theme_btn)
 
+        Clock.schedule_interval(self._tick_clock, 1)
+
+    @staticmethod
+    def _now_str() -> str:
+        return datetime.now().strftime("%I:%M %p").lstrip("0")
+
+    def _tick_clock(self, _dt):
+        self.clock_lbl.text = self._now_str()
+
+    def on_touch_down(self, touch):
+        if self.clock_lbl.collide_point(*touch.pos):
+            self._lp_touch_uid = touch.uid
+            self._lp_event = Clock.schedule_once(self._do_exit, 1.5)
+        return super().on_touch_down(touch)
+
+    def on_touch_up(self, touch):
+        if touch.uid == self._lp_touch_uid:
+            if self._lp_event:
+                self._lp_event.cancel()
+                self._lp_event = None
+            self._lp_touch_uid = None
+        return super().on_touch_up(touch)
+
+    def _do_exit(self, _dt):
+        from kivy.app import App
+        log_system("app_stop")
+        App.get_running_app().stop()
+
+    def set_weather(self, text: str):
+        self._weather_text = text
+        if self._status_revert is None:
+            self.weather_lbl.text  = text
+            self.weather_lbl.color = C_SUBTEXT
+
+    def set_status(self, text: str, color=None):
+        if self._status_revert:
+            self._status_revert.cancel()
+        self.weather_lbl.text  = text
+        self.weather_lbl.color = color or C_SUBTEXT
+        self._status_revert = Clock.schedule_once(self._revert_to_weather, 3)
+
+    def _revert_to_weather(self, _dt):
+        self._status_revert    = None
+        self.weather_lbl.text  = self._weather_text
+        self.weather_lbl.color = C_SUBTEXT
+
     def _upd(self, *_):
         self._rect.pos  = self.pos
         self._rect.size = self.size
-
-    def set_status(self, text: str, color=None):
-        self.time_lbl.text  = text
-        self.time_lbl.color = color or C_SUBTEXT
 
     def set_edit_active(self, active: bool):
         self.edit_btn.color = C_BTN_EDIT if active else C_SUBTEXT
@@ -1013,7 +1895,10 @@ class HeaderBar(BoxLayout):
 
     def refresh_colors(self):
         self._hdr_color.rgba    = C_HEADER_BG
-        self.time_lbl.color     = C_SUBTEXT
+        self.clock_lbl.color    = C_SUBTEXT
+        self.weather_lbl.color  = C_SUBTEXT
+        if self.alloff_btn:
+            self.alloff_btn.color = C_SUBTEXT
         self.settings_btn.color = C_SUBTEXT
         self.edit_btn.color     = C_SUBTEXT
         self.theme_btn.color    = C_SUBTEXT
@@ -1037,10 +1922,18 @@ class RoomGrid(BoxLayout):
         self._busy         = True
         self._edit_mode    = False
         self._settings     = load_settings()
+
+        global _DARK_MODE
+        _DARK_MODE = self._settings.get("dark_mode", False)
+        set_theme(PALETTE_DARK if _DARK_MODE else PALETTE_LIGHT)
+        Window.clearcolor = C_BG
         self._all_rooms    = []        # all (gid, group) from last fetch
         self._last_groups  = {}       # raw groups dict from last fetch
         self._light_to_group = {}     # light_id → group_id (for SSE routing)
         self._sse_started  = False
+        self._last_weather      = ""
+        self._last_weather_data = None
+        self._weather_wake      = threading.Event()
 
         # Drag state
         self._drag_card     = None
@@ -1060,6 +1953,8 @@ class RoomGrid(BoxLayout):
             on_edit_toggle=self._toggle_edit,
             on_theme_toggle=self._toggle_theme,
             on_settings_open=self._open_settings,
+            on_weather_tap=self._open_weather,
+            on_all_off=self._all_off,
         )
         self.add_widget(self.header)
 
@@ -1074,8 +1969,13 @@ class RoomGrid(BoxLayout):
         self.scroll.add_widget(self.grid)
         self.add_widget(self.scroll)
 
+        global _on_sync_error
+        _on_sync_error = self._on_supabase_error
+
+        set_brightness(self._settings.get("screen_brightness", 200))
         threading.Thread(target=self._initial_load, daemon=True).start()
         Clock.schedule_interval(self._refresh_tick, REFRESH_INTERVAL)
+        threading.Thread(target=self._weather_loop, daemon=True).start()
 
     # ── theme ─────────────────────────────────────────────────────────────────
 
@@ -1083,6 +1983,8 @@ class RoomGrid(BoxLayout):
         global _DARK_MODE
         _DARK_MODE = not _DARK_MODE
         set_theme(PALETTE_DARK if _DARK_MODE else PALETTE_LIGHT)
+        self._settings["dark_mode"] = _DARK_MODE
+        threading.Thread(target=save_settings, args=(self._settings,), daemon=True).start()
         self._refresh_colors()
 
     @mainthread
@@ -1094,6 +1996,44 @@ class RoomGrid(BoxLayout):
         self.header.set_edit_active(self._edit_mode)
         for card in self.cards.values():
             card.refresh_colors()
+
+    # ── Supabase error feedback ────────────────────────────────────────────────
+
+    @mainthread
+    def _on_supabase_error(self, msg: str):
+        print(f"[logging] Supabase sync failed: {msg}")
+        if self._settings.get("show_sync_errors", True):
+            self.header.set_status("⚠ Supabase sync failed", color=C_ERROR)
+
+    # ── weather ───────────────────────────────────────────────────────────────
+
+    def _weather_loop(self):
+        lat, lon = _resolve_location(self._settings)
+        if lat is None:
+            return
+        while True:
+            if self._settings.get("show_weather", True):
+                data = _fetch_weather(lat, lon)
+                if data:
+                    self._last_weather      = data["label"]
+                    self._last_weather_data = data
+                    self._update_weather(data["label"])
+            self._weather_wake.wait(timeout=900)
+            self._weather_wake.clear()
+
+    @mainthread
+    def _update_weather(self, text: str):
+        self.header.set_weather(text)
+
+    def _open_weather(self):
+        if not self._last_weather_data:
+            return
+        WeatherModal(
+            data=self._last_weather_data,
+            city=self._settings.get("city", ""),
+            lat=self._settings.get("latitude"),
+            lon=self._settings.get("longitude"),
+        ).open()
 
     # ── edit mode ─────────────────────────────────────────────────────────────
 
@@ -1109,18 +2049,50 @@ class RoomGrid(BoxLayout):
     def _open_settings(self):
         if not self._all_rooms:
             return
-        hidden = set(self._settings.get("hidden_rooms", []))
+        hidden           = set(self._settings.get("hidden_rooms", []))
+        brightness       = self._settings.get("screen_brightness", get_brightness())
+        show_weather     = self._settings.get("show_weather", True)
+        logging_enabled  = self._settings.get("logging_enabled", True)
+        show_sync_errors = self._settings.get("show_sync_errors", True)
+        exempt_rooms     = set(self._settings.get("exempt_rooms", []))
         SettingsPopup(
             all_rooms=self._all_rooms,
             hidden_rooms=hidden,
             on_save=self._on_settings_save,
+            brightness=brightness,
+            show_weather=show_weather,
+            logging_enabled=logging_enabled,
+            show_sync_errors=show_sync_errors,
+            exempt_rooms=exempt_rooms,
         ).open()
 
-    def _on_settings_save(self, hidden_rooms: set):
-        self._settings["hidden_rooms"] = list(hidden_rooms)
+    def _on_settings_save(self, hidden_rooms: set, brightness: int,
+                          show_weather: bool, logging_enabled: bool,
+                          show_sync_errors: bool, exempt_rooms: set):
+        global _logging_enabled
+        prev_show = self._settings.get("show_weather", True)
+        self._settings["hidden_rooms"]       = list(hidden_rooms)
+        self._settings["screen_brightness"]  = brightness
+        self._settings["show_weather"]       = show_weather
+        self._settings["logging_enabled"]    = logging_enabled
+        self._settings["show_sync_errors"]   = show_sync_errors
+        self._settings["exempt_rooms"]       = list(exempt_rooms)
+        _logging_enabled = logging_enabled
         threading.Thread(target=save_settings, args=(self._settings,), daemon=True).start()
+        if not show_weather:
+            self._update_weather("")          # clear label immediately
+        elif not prev_show:
+            if self._last_weather:
+                self._update_weather(self._last_weather)
+            self._weather_wake.set()          # wake loop to fetch fresh data
         if self._last_groups:
             self._build_grid(self._last_groups)
+
+    def _all_off(self):
+        exempt = set(self._settings.get("exempt_rooms", []))
+        for gid, card in self.cards.items():
+            if gid not in exempt:
+                card.turn_off()
 
     # ── touch / drag ──────────────────────────────────────────────────────────
 
@@ -1246,7 +2218,6 @@ class RoomGrid(BoxLayout):
             for lid in group.get("lights", []):
                 self._light_to_group[lid] = gid
 
-        self.header.set_status(f"{len(visible)} rooms")
         self._busy = False
 
         if not self._sse_started:
@@ -1270,13 +2241,11 @@ class RoomGrid(BoxLayout):
         for gid, card in self.cards.items():
             if gid in groups:
                 card.apply_group(groups[gid])
-        now = datetime.now().strftime("%I:%M %p").lstrip("0")
-        self.header.set_status(f"Updated {now}")
 
     @mainthread
     def _on_error(self, msg: str):
         self.header.set_status(f"⚠ {msg[:50]}", color=C_ERROR)
-        print(f"[HueControl] error: {msg}")
+        print(f"[Lumio] error: {msg}")
 
     # ── SSE real-time listener ─────────────────────────────────────────────────
 
@@ -1320,21 +2289,20 @@ class RoomGrid(BoxLayout):
                         }
 
             for gid, meta in affected.items():
-                # Log directly from event data — no extra API call needed
-                card = self.cards.get(gid)
-                if card:
-                    bri_pct = meta["bri_pct"] if meta["bri_pct"] is not None \
-                              else round(card._bri / 254 * 100)
-                    if meta["on"] is not None:
-                        log_event(card._room_name, gid,
-                                  "on" if meta["on"] else "off",
-                                  bri_pct, "external",
-                                  meta["owner_type"], meta["ts"])
-                    elif meta["bri_pct"] is not None:
-                        log_event(card._room_name, gid, "brightness",
-                                  bri_pct, "external",
-                                  meta["owner_type"], meta["ts"])
-
+                if not _is_huecontrol_recent(gid) and _should_log_sse(gid):
+                    card = self.cards.get(gid)
+                    if card:
+                        bri_pct = meta["bri_pct"] if meta["bri_pct"] is not None \
+                                  else round(card._bri / 254 * 100)
+                        if meta["on"] is not None:
+                            log_event(card._room_name, gid,
+                                      "on" if meta["on"] else "off",
+                                      bri_pct, "external",
+                                      meta["owner_type"], meta["ts"])
+                        elif meta["bri_pct"] is not None:
+                            log_event(card._room_name, gid, "brightness",
+                                      bri_pct, "external",
+                                      meta["owner_type"], meta["ts"])
                 threading.Thread(
                     target=self._refresh_group, args=(gid,), daemon=True
                 ).start()
@@ -1365,7 +2333,7 @@ class ErrorScreen(BoxLayout):
             size=lambda *_: setattr(self._r, "size", self.size),
         )
         self.add_widget(Label(
-            text="[b]HueControl[/b]", markup=True,
+            text="[b]Lumio[/b]", markup=True,
             font_size="28sp", color=C_TEXT, size_hint_y=0.3,
         ))
         self.add_widget(Label(
@@ -1377,9 +2345,11 @@ class ErrorScreen(BoxLayout):
 # ── App ───────────────────────────────────────────────────────────────────────
 
 class HueApp(App):
-    title = "Hue Control"
+    title = "Lumio"
 
     def build(self):
+        cfg = load_settings()
+        init_logging(cfg)
         log_system("app_start")
         Window.clearcolor = C_BG
         try:

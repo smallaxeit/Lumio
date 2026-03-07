@@ -2,5 +2,17 @@
   "bridge_ip": "192.168.x.x",
   "username": "your-hue-api-key-here",
   "hidden_rooms": [],
-  "room_order": []
+  "room_order": [],
+  "exempt_rooms": [],
+  "screen_brightness": 200,
+  "dark_mode": false,
+  "show_weather": true,
+  "latitude": null,
+  "longitude": null,
+  "city": "",
+  "logging_enabled": true,
+  "show_sync_errors": true,
+  "log_max_mb": 5,
+  "supabase_url": "",
+  "supabase_key": ""
 }
