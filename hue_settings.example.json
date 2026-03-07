@@ -1,0 +1,6 @@
+{
+  "bridge_ip": "192.168.x.x",
+  "username": "your-hue-api-key-here",
+  "hidden_rooms": [],
+  "room_order": []
+}

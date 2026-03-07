@@ -1,0 +1,15 @@
+# Credentials and runtime data — never commit these
+hue_settings.json
+hue_log.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Kivy cache
+.kivy/
+
+# Visual Studio
+.vs/
+*.user
