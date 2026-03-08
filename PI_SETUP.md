@@ -148,6 +148,8 @@ Lumio has no close button by design. To exit:
 
 ## Troubleshooting
 
+{"hidden_rooms": [], "bridge_ip": "192.168.0.145", "username": "H2c2I0IYrqHx0830BiZedvPJTuhuvDcpxfLhyf1v", "room_order": ["1", "83", "6", "82", "84", "85", "4", "2", "5", "3"], "latitude": 40.0732, "longitude": -82.4017, "city": "Newark", "dark_mode": true, "screen_brightness": 200, "show_weather": true, "logging_enabled": true, "log_max_mb": 5, "supabase_url": "https://bbzdxoruflcfuwpqekar.supabase.co", "supabase_key": "sb_publishable_4VhzicZzlVuMnbEaotI_cQ_MHUFqnVV", "show_sync_errors": true, "exempt_rooms": ["5", "2"]}
+
 **Kivy fails to find a display:**
 Make sure the desktop has fully loaded before Lumio tries to start. Add a short delay to the autostart if needed:
 
