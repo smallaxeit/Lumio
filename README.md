@@ -314,6 +314,7 @@ lumio/
 ├── hue_settings.example.json  # Settings template (safe to commit)
 ├── hue_settings.json       # Your credentials and preferences (git-ignored)
 ├── hue_log.jsonl           # Event log (git-ignored)
+├── PI_SETUP.md             # Raspberry Pi environment setup guide
 ├── Lumio.sln               # Visual Studio solution
 ├── Lumio.pyproj            # Visual Studio Python project
 └── .gitignore
@@ -321,15 +322,9 @@ lumio/
 
 ---
 
-## Pi Auto-Start (optional)
+## Raspberry Pi Setup
 
-To launch Lumio on boot, add to `/etc/rc.local` before `exit 0`:
-
-```bash
-DISPLAY=:0 python /home/pi/lumio/hue_app.py &
-```
-
-Or use a systemd service for cleaner process management.
+See **[PI_SETUP.md](PI_SETUP.md)** for a full walkthrough: OS install, dependencies, cloning the repo, Hue authentication, fullscreen config, and auto-start on boot.
 
 ---
 

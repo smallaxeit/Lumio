@@ -697,7 +697,7 @@ class LightRow(BoxLayout):
                       "brightness", round(bri / 254 * 100), "lumio",
                       light=self._name, light_id=self.light_id)
             if not self._is_on:
-                self._apply_on_state(True)
+                Clock.schedule_once(lambda _: self._apply_on_state(True), 0)
         except Exception as exc:
             print(f"[{self._name}] brightness error: {exc}")
             log_system("error", f"light brightness {self._name} ({self.light_id}): {exc}")
@@ -1049,7 +1049,7 @@ class RoomCard(BoxLayout):
             log_event(self._room_name, self.group_id,
                       "brightness", round(bri / 254 * 100), "lumio")
             if not self._is_on:
-                self._apply_on_state(True)
+                Clock.schedule_once(lambda _: self._apply_on_state(True), 0)
         except Exception as exc:
             print(f"[{self._room_name}] brightness error: {exc}")
             log_system("error", f"room brightness {self._room_name} ({self.group_id}): {exc}")
