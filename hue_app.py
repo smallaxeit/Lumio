@@ -1142,7 +1142,7 @@ class SettingsPopup(ModalView):
                  exempt_rooms: set = None, **kwargs):
         super().__init__(
             background_color=(0, 0, 0, 0.55),
-            size_hint=(0.90, 0.92),
+            size_hint=(0.90, 0.96),
             **kwargs,
         )
         self._on_save          = on_save
@@ -1154,7 +1154,7 @@ class SettingsPopup(ModalView):
         self._show_sync_errors = show_sync_errors
         self._adv_open         = False
 
-        card = BoxLayout(orientation='vertical', padding=[14, 12, 14, 12], spacing=8)
+        card = BoxLayout(orientation='vertical', padding=[14, 8, 14, 8], spacing=6)
         with card.canvas.before:
             Color(*C_BG)
             self._card_rect = RoundedRectangle(radius=[16], pos=card.pos, size=card.size)
@@ -1801,22 +1801,22 @@ class HeaderBar(BoxLayout):
         # self.clock_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
         # self.add_widget(self.clock_lbl)
 
-        if on_all_off:
-            self.alloff_btn = Button(
-                text="✕",
-                font_name=SYMBOL_FONT or 'Roboto',
-                font_size="20sp",
-                size_hint=(None, 0.85),
-                width=46,
-                background_normal="",
-                background_down="",
-                background_color=(0, 0, 0, 0),
-                color=C_SUBTEXT,
-            )
-            self.alloff_btn.bind(on_release=lambda _: on_all_off())
-            self.add_widget(self.alloff_btn)
-        else:
-            self.alloff_btn = None
+        # All Off button — commented out, keep for future use
+        # if on_all_off:
+        #     self.alloff_btn = Button(
+        #         text="✕",
+        #         font_name=SYMBOL_FONT or 'Roboto',
+        #         font_size="20sp",
+        #         size_hint=(None, 0.85),
+        #         width=46,
+        #         background_normal="",
+        #         background_down="",
+        #         background_color=(0, 0, 0, 0),
+        #         color=C_SUBTEXT,
+        #     )
+        #     self.alloff_btn.bind(on_release=lambda _: on_all_off())
+        #     self.add_widget(self.alloff_btn)
+        self.alloff_btn = None
 
         self.weather_lbl = _WeatherBtn(
             text="",
@@ -1994,11 +1994,17 @@ class RoomGrid(BoxLayout):
             on_theme_toggle=self._toggle_theme,
             on_settings_open=self._open_settings,
             on_weather_tap=self._open_weather,
-            on_all_off=self._all_off,
+            # on_all_off=self._all_off,  # All Off button commented out
         )
         self.add_widget(self.header)
 
-        self.scroll = ScrollView(do_scroll_x=False, bar_width=4, bar_color=C_SUBTEXT)
+        self.scroll = ScrollView(
+            do_scroll_x=False,
+            bar_width=4,
+            bar_color=C_SUBTEXT,
+            size_hint_y=1,
+            always_overscroll=False,
+        )
         self.grid = GridLayout(
             cols=CARD_COLS,
             spacing=CARD_SPACING,
