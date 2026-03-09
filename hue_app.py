@@ -37,9 +37,12 @@ Config.set('input', 'mouse', 'mouse,disable_multitouch')
 Config.set('input', 'wm_touch', 'wm_touch')
 Config.set('input', 'wm_pen',   'wm_pen')
 if DEV_WINDOW_SIZE:
-    Config.set('graphics', 'width',     str(DEV_WINDOW_SIZE[0]))
-    Config.set('graphics', 'height',    str(DEV_WINDOW_SIZE[1]))
-    Config.set('graphics', 'resizable', '0')
+    Config.set('graphics', 'width',      str(DEV_WINDOW_SIZE[0]))
+    Config.set('graphics', 'height',     str(DEV_WINDOW_SIZE[1]))
+    Config.set('graphics', 'resizable',  '0')
+else:
+    Config.set('graphics', 'fullscreen', 'auto')
+    Config.set('graphics', 'show_cursor', '0')
 
 from kivy.app import App
 from kivy.clock import Clock, mainthread
@@ -852,6 +855,7 @@ class RoomCard(BoxLayout):
         self._updating     = False
         self._in_edit      = False
         self._lp_event     = None       # long-press timer
+        self._lp_touch_uid = None       # track touch without grabbing
         self._long_pressed = False      # suppress button release after long press
         self._lp_ox = self._lp_oy = 0  # touch origin for move threshold
 
@@ -955,20 +959,20 @@ class RoomCard(BoxLayout):
     def on_touch_down(self, touch):
         if not self._in_edit and self.collide_point(*touch.pos):
             self._lp_ox, self._lp_oy = touch.pos
+            self._lp_touch_uid = touch.uid
             self._lp_event = Clock.schedule_once(self._do_long_press, 0.5)
-            touch.grab(self)
         return super().on_touch_down(touch)
 
     def on_touch_move(self, touch):
-        if touch.grab_current is self and self._lp_event:
+        if self._lp_event and touch.uid == self._lp_touch_uid:
             if abs(touch.x - self._lp_ox) > 10 or abs(touch.y - self._lp_oy) > 10:
                 self._lp_event.cancel()
                 self._lp_event = None
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
-        if touch.grab_current is self:
-            touch.ungrab(self)
+        if touch.uid == self._lp_touch_uid:
+            self._lp_touch_uid = None
             if self._lp_event:
                 self._lp_event.cancel()
                 self._lp_event = None
@@ -1033,6 +1037,8 @@ class RoomCard(BoxLayout):
             return
         self._bri = int(value)
         self.pct_lbl.text = f"{round(value / 254 * 100)}%"
+        if not self._is_on:
+            return   # update local display only; don't call API when light is off
         if self._slider_ev:
             self._slider_ev.cancel()
         self._slider_ev = Clock.schedule_once(
@@ -1066,6 +1072,16 @@ class RoomCard(BoxLayout):
         self._apply_on_state(self._is_on)
         self._set_slider(bri)
 
+    @mainthread
+    def apply_sse_state(self, on, bri_pct):
+        """Immediately reflect a known SSE state change without an API round-trip."""
+        if self._pending:
+            return
+        if on is not None:
+            self._apply_on_state(on)
+        if bri_pct is not None:
+            self._set_slider(round(bri_pct / 100 * 254))
+
     def _set_slider(self, bri: int):
         """Update slider position without triggering an API call."""
         self._updating    = True
@@ -1089,8 +1105,30 @@ class RoomCard(BoxLayout):
 
 # ── SettingsPopup ─────────────────────────────────────────────────────────────
 
-class _TappableRow(ButtonBehavior, BoxLayout):
-    """BoxLayout that fires on_release like a Button."""
+class _TappableRow(BoxLayout):
+    """BoxLayout that fires on_release on tap without grabbing the touch.
+    Replacing ButtonBehavior so parent ScrollViews can still scroll freely."""
+
+    __events__ = ('on_release',)
+
+    def on_release(self):
+        pass
+
+    def on_touch_down(self, touch):
+        if self.collide_point(*touch.pos):
+            self._tap_uid = touch.uid
+            self._tap_ox  = touch.x
+            self._tap_oy  = touch.y
+        return super().on_touch_down(touch)
+
+    def on_touch_up(self, touch):
+        if getattr(self, '_tap_uid', None) == touch.uid:
+            self._tap_uid = None
+            if (abs(touch.x - self._tap_ox) < 20
+                    and abs(touch.y - self._tap_oy) < 20
+                    and self.collide_point(*touch.pos)):
+                self.dispatch('on_release')
+        return super().on_touch_up(touch)
 
 
 class SettingsPopup(ModalView):
@@ -1747,24 +1785,25 @@ class HeaderBar(BoxLayout):
 
         self._weather_text  = ""    # last known weather string
         self._status_revert = None  # pending Clock event to restore weather after status
-        self._lp_event      = None  # long-press timer for clock exit
-        self._lp_touch_uid  = None
+        # self._lp_event      = None  # long-press timer for clock exit (clock removed)
+        # self._lp_touch_uid  = None
 
-        self.clock_lbl = Label(
-            text=self._now_str(),
-            font_size="14sp",
-            color=C_SUBTEXT,
-            halign="right",
-            valign="middle",
-            size_hint=(None, 0.85),
-            width=88,
-        )
-        self.clock_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
-        self.add_widget(self.clock_lbl)
+        # Clock label commented out — not needed on Pi panel
+        # self.clock_lbl = Label(
+        #     text=self._now_str(),
+        #     font_size="14sp",
+        #     color=C_SUBTEXT,
+        #     halign="right",
+        #     valign="middle",
+        #     size_hint=(None, 0.85),
+        #     width=88,
+        # )
+        # self.clock_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
+        # self.add_widget(self.clock_lbl)
 
         if on_all_off:
             self.alloff_btn = Button(
-                text="⏻",
+                text="✕",
                 font_name=SYMBOL_FONT or 'Roboto',
                 font_size="20sp",
                 size_hint=(None, 0.85),
@@ -1835,33 +1874,34 @@ class HeaderBar(BoxLayout):
         self.add_widget(self.edit_btn)
         self.add_widget(self.theme_btn)
 
-        Clock.schedule_interval(self._tick_clock, 1)
+        # Clock.schedule_interval(self._tick_clock, 1)
 
-    @staticmethod
-    def _now_str() -> str:
-        return datetime.now().strftime("%I:%M %p").lstrip("0")
+    # @staticmethod
+    # def _now_str() -> str:
+    #     return datetime.now().strftime("%I:%M %p").lstrip("0")
 
-    def _tick_clock(self, _dt):
-        self.clock_lbl.text = self._now_str()
+    # def _tick_clock(self, _dt):
+    #     self.clock_lbl.text = self._now_str()
 
-    def on_touch_down(self, touch):
-        if self.clock_lbl.collide_point(*touch.pos):
-            self._lp_touch_uid = touch.uid
-            self._lp_event = Clock.schedule_once(self._do_exit, 1.5)
-        return super().on_touch_down(touch)
+    # Long-press clock to exit — disabled with clock (re-enable if clock restored)
+    # def on_touch_down(self, touch):
+    #     if self.clock_lbl.collide_point(*touch.pos):
+    #         self._lp_touch_uid = touch.uid
+    #         self._lp_event = Clock.schedule_once(self._do_exit, 1.5)
+    #     return super().on_touch_down(touch)
 
-    def on_touch_up(self, touch):
-        if touch.uid == self._lp_touch_uid:
-            if self._lp_event:
-                self._lp_event.cancel()
-                self._lp_event = None
-            self._lp_touch_uid = None
-        return super().on_touch_up(touch)
+    # def on_touch_up(self, touch):
+    #     if touch.uid == self._lp_touch_uid:
+    #         if self._lp_event:
+    #             self._lp_event.cancel()
+    #             self._lp_event = None
+    #         self._lp_touch_uid = None
+    #     return super().on_touch_up(touch)
 
-    def _do_exit(self, _dt):
-        from kivy.app import App
-        log_system("app_stop")
-        App.get_running_app().stop()
+    # def _do_exit(self, _dt):
+    #     from kivy.app import App
+    #     log_system("app_stop")
+    #     App.get_running_app().stop()
 
     def set_weather(self, text: str):
         self._weather_text = text
@@ -1895,7 +1935,7 @@ class HeaderBar(BoxLayout):
 
     def refresh_colors(self):
         self._hdr_color.rgba    = C_HEADER_BG
-        self.clock_lbl.color    = C_SUBTEXT
+        # self.clock_lbl.color  = C_SUBTEXT  # clock commented out
         self.weather_lbl.color  = C_SUBTEXT
         if self.alloff_btn:
             self.alloff_btn.color = C_SUBTEXT
@@ -2289,9 +2329,12 @@ class RoomGrid(BoxLayout):
                         }
 
             for gid, meta in affected.items():
-                if not _is_huecontrol_recent(gid) and _should_log_sse(gid):
-                    card = self.cards.get(gid)
-                    if card:
+                card = self.cards.get(gid)
+                if not _is_huecontrol_recent(gid):
+                    # Apply state immediately from SSE data — don't wait for API
+                    if card and (meta["on"] is not None or meta["bri_pct"] is not None):
+                        card.apply_sse_state(meta["on"], meta["bri_pct"])
+                    if _should_log_sse(gid) and card:
                         bri_pct = meta["bri_pct"] if meta["bri_pct"] is not None \
                                   else round(card._bri / 254 * 100)
                         if meta["on"] is not None:
