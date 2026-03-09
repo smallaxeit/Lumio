@@ -62,7 +62,12 @@ from kivy.uix.scrollview import ScrollView
 
 SETTINGS_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hue_settings.json")
 LOG_FILE         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hue_log.jsonl")
-BACKLIGHT_PATH   = "/sys/class/backlight/rpi_backlight/brightness"
+_BACKLIGHT_CANDIDATES = [
+    "/sys/class/backlight/rpi_backlight/brightness",
+    "/sys/class/backlight/10-0045/brightness",
+    "/sys/class/backlight/backlight/brightness",
+]
+BACKLIGHT_PATH = next((p for p in _BACKLIGHT_CANDIDATES if os.path.exists(p)), _BACKLIGHT_CANDIDATES[0])
 REFRESH_INTERVAL = 10
 CARD_HEIGHT      = 82
 CARD_SPACING     = 4
@@ -348,12 +353,20 @@ def get_brightness() -> int:
         return 200
 
 def set_brightness(value: int) -> None:
-    """Write backlight brightness (10–255). Silent no-op on dev machines."""
+    """Write backlight brightness (10–255). Tries direct write then sudo tee."""
+    v = str(max(10, min(255, int(value))))
     try:
         with open(BACKLIGHT_PATH, "w") as f:
-            f.write(str(max(10, min(255, int(value)))))
-    except Exception:
-        pass
+            f.write(v)
+    except PermissionError:
+        try:
+            import subprocess
+            subprocess.run(["sudo", "tee", BACKLIGHT_PATH],
+                           input=v.encode(), capture_output=True)
+        except Exception as exc:
+            print(f"[brightness] sudo tee failed: {exc}")
+    except Exception as exc:
+        print(f"[brightness] {exc}")
 
 
 # ── Weather ────────────────────────────────────────────────────────────────────
@@ -1999,6 +2012,7 @@ class RoomGrid(BoxLayout):
             on_weather_tap=self._open_weather,
             # on_all_off=self._all_off,  # All Off button commented out
         )
+        self.header.set_theme_label(_DARK_MODE)
         self.add_widget(self.header)
 
         self.scroll = ScrollView(

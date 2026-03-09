@@ -1,6 +1,6 @@
 # Lumio
 
-[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.4.0-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.4.0) ![Date](https://img.shields.io/badge/updated-2026--03--07-lightgrey)
+[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.4.1-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.4.1) ![Date](https://img.shields.io/badge/updated-2026--03--09-lightgrey)
 
 A touchscreen Philips Hue controller built with Python and Kivy, designed for a Raspberry Pi 4 with the official 7" display. Runs as a local full-screen panel — no cloud, no browser, no subscription.
 
@@ -358,6 +358,22 @@ git push origin v0.2.0
 ``
 
 ### Changelog
+
+## [0.4.1] - 2026-03-09
+### Fixed
+- Main grid and settings scrolling — removed touch grab from `RoomCard` and rewrote `_TappableRow` without `ButtonBehavior` so `ScrollView` can scroll freely
+- SSE state changes now immediately reflected in UI without waiting for API round-trip
+- Slider no longer triggers API or turns lights on when the room is off
+- Weather and day-detail modals pinned to top of screen — no dead space above card
+- Settings popup pinned to top — Done button fully visible
+- Theme icon (☾/☀) now correct on startup when dark mode is saved
+- Pi backlight path auto-detected (`rpi_backlight` or `10-0045`); falls back to `sudo tee` if direct write is blocked by permissions
+
+### Changed
+- Sort/reorder button icon changed from ✎ to ⇅
+- Settings button moved to far right of header
+- Clock removed from header (code preserved, commented out)
+- Pi: fullscreen mode and cursor hidden when `DEV_WINDOW_SIZE = None`
 
 ## [0.4.0] - 2026-03-07
 ### Added
