@@ -1143,6 +1143,7 @@ class SettingsPopup(ModalView):
         super().__init__(
             background_color=(0, 0, 0, 0.55),
             size_hint=(0.90, 0.96),
+            pos_hint={'center_x': 0.5, 'top': 1.0},
             **kwargs,
         )
         self._on_save          = on_save
@@ -1531,7 +1532,8 @@ class WeatherModal(ModalView):
     def __init__(self, data: dict, city: str, lat=None, lon=None, **kwargs):
         super().__init__(
             background_color=(0, 0, 0, 0.70),
-            size_hint=(0.85, 0.82),
+            size_hint=(0.92, 0.88),
+            pos_hint={'center_x': 0.5, 'top': 1.0},
             **kwargs,
         )
         self._lat = lat
@@ -1649,7 +1651,8 @@ class DayDetailModal(ModalView):
     def __init__(self, day_name: str, date_str: str, lat: float, lon: float, **kwargs):
         super().__init__(
             background_color=(0, 0, 0, 0.80),
-            size_hint=(0.85, 0.88),
+            size_hint=(0.92, 0.96),
+            pos_hint={'center_x': 0.5, 'top': 1.0},
             **kwargs,
         )
         self._lat      = lat
@@ -1845,7 +1848,7 @@ class HeaderBar(BoxLayout):
         self.settings_btn.bind(on_release=lambda _: on_settings_open())
 
         self.edit_btn = Button(
-            text="✎",
+            text="⇅",
             font_name=SYMBOL_FONT or 'Roboto',
             font_size="20sp",
             size_hint=(None, 0.85),
@@ -1870,9 +1873,9 @@ class HeaderBar(BoxLayout):
         )
         self.theme_btn.bind(on_release=lambda _: on_theme_toggle())
 
-        self.add_widget(self.settings_btn)
         self.add_widget(self.edit_btn)
         self.add_widget(self.theme_btn)
+        self.add_widget(self.settings_btn)
 
         # Clock.schedule_interval(self._tick_clock, 1)
 
@@ -1927,7 +1930,7 @@ class HeaderBar(BoxLayout):
 
     def set_edit_active(self, active: bool):
         self.edit_btn.color = C_BTN_EDIT if active else C_SUBTEXT
-        self.edit_btn.text  = "✔" if active else "✎"
+        self.edit_btn.text  = "✔" if active else "⇅"
 
     def set_theme_label(self, dark_mode: bool):
         self.theme_btn.text  = "☀" if dark_mode else "☾"
