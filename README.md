@@ -1,6 +1,6 @@
 # Lumio
 
-[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.4.1-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.4.1) ![Date](https://img.shields.io/badge/updated-2026--03--09-lightgrey)
+[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.5.0-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.5.0) ![Date](https://img.shields.io/badge/updated-2026--03--09-lightgrey)
 
 A touchscreen Philips Hue controller built with Python and Kivy, designed for a Raspberry Pi 4 with the official 7" display. Runs as a local full-screen panel — no cloud, no browser, no subscription.
 
@@ -11,7 +11,7 @@ git clone https://github.com/smallaxeit/lumio.git
 cd lumio
 pip install kivy requests urllib3
 python hue_discovery.py   # one-time setup — press button on bridge when prompted
-python hue_app.py
+python lumio.py
 ```
 
 ---
@@ -26,22 +26,23 @@ python hue_app.py
 - Event logging (on/off, brightness, source, timestamp) to `hue_log.jsonl`
 
 **Header**
-- Live clock (left) — `2:47 PM`, updates every second
-- ⏻ All Off button — turns off all rooms in one tap; per-room exemptions configurable in settings
-- Local weather (right) — current temp + condition, refreshes every 15 min
+- ☰ hamburger button (left) — opens the settings popup
+- Local weather — current temp + condition, refreshes every 15 min, shown just right of the hamburger
   - Location detected automatically via IP geolocation on first run (no API key needed)
   - Tap the weather text to open the full weather detail card
+- ✔ confirm button (right) — appears only in sort mode (long-press a card to enter)
 
 **Weather detail**
 - Current temp (large), condition, wind speed
 - 5-day forecast — high/low, condition, precipitation chance
 - Tap any forecast day for an hourly breakdown (6am–10pm) with temp, condition, precip %, wind
 
-**Settings (⚙ button)**
+**Settings (☰ button)**
+- Light/dark theme toggle — persists across restarts
 - Screen brightness slider (Pi backlight, persists across restarts)
 - Show/hide weather toggle
+- Advanced section (collapsible): Enable Logging, Show Sync Errors
 - Per-room controls: show/hide in grid + include/exclude from All Off
-- Light/dark theme — persists across restarts
 
 ---
 
@@ -121,14 +122,14 @@ python hue_discovery.py
 
 **Development (windowed, 800×480):**
 ```bash
-python hue_app.py
+python lumio.py
 ```
 
 **Raspberry Pi (fullscreen):**
 
-Set `DEV_WINDOW_SIZE = None` at the top of `hue_app.py`, then:
+Set `DEV_WINDOW_SIZE = None` at the top of `lumio.py`, then:
 ```bash
-DISPLAY=:0 python hue_app.py
+DISPLAY=:0 python lumio.py
 ```
 
 Or add to `/etc/rc.local` to launch on boot.
@@ -167,11 +168,11 @@ See `hue_settings.example.json` for the expected structure.
 |---|---|
 | Tap a card | Toggle room on/off |
 | Drag the slider | Adjust room brightness |
-| Long-press a card | Open per-light controls |
-| ✎ button | Enter reorder mode — drag cards |
-| ⚙ button | Open settings (brightness, weather, rooms) |
-| ☾/☀ button | Toggle dark/light theme (saved automatically) |
-| ⏻ button | Turn off all rooms (respects per-room exemptions) |
+| Long-press a card | Enter sort mode (sliders hidden, cards draggable) |
+| ✔ button | Exit sort mode and save order |
+| Drag a card in sort mode | Reorder rooms |
+| ☰ button | Open settings popup |
+| Dark Mode toggle (in settings) | Toggle dark/light theme (saved automatically) |
 | Tap weather text | Open weather detail card |
 | Tap a forecast day | Open hourly breakdown for that day |
 
@@ -309,8 +310,15 @@ All light changes are written to `hue_log.jsonl` (one JSON object per line). Thi
 
 ```
 lumio/
-├── hue_app.py              # Main Kivy application
-├── hue_discovery.py        # Bridge discovery and authentication
+├── lumio.py                # Entry point — RoomGrid, ErrorScreen, LumioApp
+├── theme.py                # Palette, mutable color container (C), shared constants
+├── ui_cards.py             # RoomCard, LightRow, RoomDetailModal, DragGhost
+├── ui_panels.py            # SettingsPopup, WeatherModal, DayDetailModal, HeaderBar
+├── lumio_api.py            # HueAPI — Hue local REST + CLIP v2 SSE client
+├── lumio_log.py            # Event logging (local JSONL) and Supabase sync
+├── lumio_weather.py        # Open-Meteo weather fetching and IP geolocation
+├── lumio_brightness.py     # Pi backlight brightness read/write
+├── hue_discovery.py        # Bridge discovery and authentication (one-time setup)
 ├── hue_settings.example.json  # Settings template (safe to commit)
 ├── hue_settings.json       # Your credentials and preferences (git-ignored)
 ├── hue_log.jsonl           # Event log (git-ignored)
@@ -358,6 +366,14 @@ git push origin v0.2.0
 ``
 
 ### Changelog
+
+## [0.5.0] - 2026-03-09
+### Changed
+- Split `hue_app.py` into eight focused modules: `lumio.py`, `theme.py`, `ui_cards.py`, `ui_panels.py`, `lumio_api.py`, `lumio_log.py`, `lumio_weather.py`, `lumio_brightness.py`
+- Entry point renamed from `hue_app.py` to `lumio.py`
+- Settings button changed from ⚙ to ☰; weather label moved immediately right of it
+- Dark/light mode toggle moved into the settings popup (removed standalone ☾/☀ header button)
+- Sort mode entered by long-pressing a card; ✔ button in header exits sort mode (was a separate ✎ header button always visible)
 
 ## [0.4.1] - 2026-03-09
 ### Fixed
