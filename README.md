@@ -1,6 +1,6 @@
 # Lumio
 
-[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.5.0-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.5.0) ![Date](https://img.shields.io/badge/updated-2026--03--09-lightgrey)
+[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.5.1-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.5.1) ![Date](https://img.shields.io/badge/updated-2026--03--12-lightgrey)
 
 A touchscreen Philips Hue controller built with Python and Kivy, designed for a Raspberry Pi 4 with the official 7" display. Runs as a local full-screen panel — no cloud, no browser, no subscription.
 
@@ -366,6 +366,17 @@ git push origin v0.2.0
 ``
 
 ### Changelog
+
+## [0.5.1] - 2026-03-12
+### Fixed
+- Drag-to-reorder on Pi touchscreen — long-press now grabs the touch immediately so subsequent move events route to the drag handler instead of ScrollView, fixing the cascade/freeze behaviour
+- All 10 rooms now fit on the 480px display without requiring a scroll (header 50px, cards 80px)
+
+### Changed
+- Room card layout redesigned: horizontal split — left 70% holds room name + brightness slider, right 30% is a dedicated ON/OFF button inset with padding; slider and button no longer overlap, reducing accidental presses
+- Weather text in header: larger (16sp), bold, full-contrast colour — easier to read and tap
+- Header ☰ button colour raised to full contrast
+- `.venv/` added to `.gitignore` to prevent the virtual environment from being indexed or committed
 
 ## [0.5.0] - 2026-03-09
 ### Changed
