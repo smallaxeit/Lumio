@@ -203,6 +203,29 @@ class RoomGrid(BoxLayout):
         for card in self.cards.values():
             card.set_edit_mode(self._edit_mode)
 
+    def _enter_edit_with_drag(self, card, touch):
+        """Enter sort mode from a long-press and immediately begin dragging.
+
+        Called with the live touch so we can grab it before ScrollView claims
+        any subsequent move events — fixes the cascade/freeze on Pi touchscreen.
+        """
+        if not self._edit_mode:
+            self._edit_mode = True
+            self.header.set_edit_active(True)
+            self.scroll.do_scroll_y = False
+            for c in self.cards.values():
+                c.set_edit_mode(True)
+        if touch is None:
+            return
+        # Release any existing grab (e.g. ScrollView) and claim the touch ourselves.
+        for wr in list(touch.grab_list):
+            w = wr()
+            if w:
+                touch.ungrab(w)
+        touch.grab(self)
+        self._begin_drag(card, touch)
+        self._drag_touch_uid = touch.uid
+
     # ── settings ──────────────────────────────────────────────────────────────
 
     def _open_settings(self):
@@ -275,6 +298,7 @@ class RoomGrid(BoxLayout):
         if self._drag_touch_uid is not None and touch.uid == self._drag_touch_uid:
             self._end_drag(touch)
             self._drag_touch_uid = None
+            touch.ungrab(self)
             return True
         return super().on_touch_up(touch)
 
@@ -354,7 +378,7 @@ class RoomGrid(BoxLayout):
 
         for gid, group in visible:
             card = RoomCard(gid, group, self.api,
-                            on_long_press=self._toggle_edit,
+                            on_long_press=self._enter_edit_with_drag,
                             size_hint_y=None, height=CARD_HEIGHT)
             self.cards[gid] = card
             self.grid.add_widget(card)

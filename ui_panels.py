@@ -718,7 +718,7 @@ class HeaderBar(BoxLayout):
         super().__init__(
             orientation="horizontal",
             size_hint_y=None,
-            height=44,
+            height=50,
             padding=[8, 4, 8, 4],
             spacing=6,
             **kwargs,
@@ -744,15 +744,16 @@ class HeaderBar(BoxLayout):
             background_normal="",
             background_down="",
             background_color=(0, 0, 0, 0),
-            color=C.SUBTEXT,
+            color=C.TEXT,
         )
         self.settings_btn.bind(on_release=lambda _: on_settings_open())
 
         # Weather label — just right of hamburger, fills remaining space
         self.weather_lbl = _WeatherBtn(
             text="",
-            font_size="13sp",
-            color=C.SUBTEXT,
+            font_size="16sp",
+            bold=True,
+            color=C.TEXT,
             halign="left",
             valign="middle",
             size_hint=(1, 0.85),
@@ -786,7 +787,7 @@ class HeaderBar(BoxLayout):
         self._weather_text = text
         if self._status_revert is None:
             self.weather_lbl.text  = text
-            self.weather_lbl.color = C.SUBTEXT
+            self.weather_lbl.color = C.TEXT
 
     def set_status(self, text: str, color=None):
         if self._status_revert:
@@ -798,7 +799,7 @@ class HeaderBar(BoxLayout):
     def _revert_to_weather(self, _dt):
         self._status_revert    = None
         self.weather_lbl.text  = self._weather_text
-        self.weather_lbl.color = C.SUBTEXT
+        self.weather_lbl.color = C.TEXT
 
     def _upd(self, *_):
         self._rect.pos  = self.pos
@@ -814,5 +815,5 @@ class HeaderBar(BoxLayout):
 
     def refresh_colors(self):
         self._hdr_color.rgba    = C.HEADER_BG
-        self.weather_lbl.color  = C.SUBTEXT
-        self.settings_btn.color = C.SUBTEXT
+        self.weather_lbl.color  = C.TEXT
+        self.settings_btn.color = C.TEXT

@@ -16,7 +16,7 @@ LOG_FILE      = os.path.join(_DIR, "hue_log.jsonl")
 
 # ── Grid / layout constants ────────────────────────────────────────────────────
 
-CARD_HEIGHT      = 82
+CARD_HEIGHT      = 80
 CARD_SPACING     = 4
 CARD_COLS        = 2
 REFRESH_INTERVAL = 10

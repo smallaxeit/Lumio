@@ -6,6 +6,8 @@ hue_log.jsonl
 __pycache__/
 *.py[cod]
 *.pyo
+.venv/
+venv/
 
 # Kivy cache
 .kivy/

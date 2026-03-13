@@ -299,9 +299,9 @@ class RoomCard(BoxLayout):
     def __init__(self, group_id: str, group: dict, api,
                  on_long_press=None, **kwargs):
         super().__init__(
-            orientation="vertical",
-            padding=[12, 6, 10, 6],
-            spacing=2,
+            orientation="horizontal",
+            padding=0,
+            spacing=0,
             **kwargs,
         )
         self.group_id       = group_id
@@ -313,6 +313,7 @@ class RoomCard(BoxLayout):
         self._in_edit       = False
         self._lp_event      = None       # long-press timer
         self._lp_touch_uid  = None       # track touch without grabbing
+        self._lp_touch      = None       # touch object kept for drag handoff
         self._long_pressed  = False      # suppress button release after long press
         self._lp_ox = self._lp_oy = 0   # touch origin for move threshold
 
@@ -328,7 +329,13 @@ class RoomCard(BoxLayout):
             self._bg_rect  = RoundedRectangle(radius=[10], pos=self.pos, size=self.size)
         self.bind(pos=self._sync_bg, size=self._sync_bg)
 
-        top = BoxLayout(orientation="horizontal", spacing=8, size_hint_y=0.52)
+        # Left panel: room name (top) + brightness slider (bottom)
+        left = BoxLayout(
+            orientation="vertical",
+            size_hint_x=0.70,
+            padding=[12, 6, 6, 6],
+            spacing=2,
+        )
 
         self.name_lbl = Label(
             text=self._room_name,
@@ -337,24 +344,9 @@ class RoomCard(BoxLayout):
             color=self._name_rgba(),
             halign="left",
             valign="middle",
-            size_hint_x=0.68,
+            size_hint_y=0.52,
         )
         self.name_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
-
-        self.btn = Button(
-            text="ON" if self._is_on else "OFF",
-            font_size="15sp",
-            bold=True,
-            size_hint_x=0.32,
-            background_normal="",
-            background_down="",
-            background_color=C.BTN_ON if self._is_on else C.BTN_OFF,
-            color=(1, 1, 1, 1),
-        )
-        self.btn.bind(on_release=self._handle_toggle)
-
-        top.add_widget(self.name_lbl)
-        top.add_widget(self.btn)
 
         bri_row = BoxLayout(orientation="horizontal", size_hint_y=0.48, spacing=4)
         self.slider = Slider(
@@ -377,8 +369,29 @@ class RoomCard(BoxLayout):
         bri_row.add_widget(self.slider)
         bri_row.add_widget(self.pct_lbl)
 
-        self.add_widget(top)
-        self.add_widget(bri_row)
+        left.add_widget(self.name_lbl)
+        left.add_widget(bri_row)
+
+        # Right panel: ON/OFF button with vertical padding so it sits inset in the card
+        right = BoxLayout(
+            orientation="vertical",
+            size_hint_x=0.30,
+            padding=[4, 10, 8, 10],
+        )
+        self.btn = Button(
+            text="ON" if self._is_on else "OFF",
+            font_size="15sp",
+            bold=True,
+            background_normal="",
+            background_down="",
+            background_color=C.BTN_ON if self._is_on else C.BTN_OFF,
+            color=(1, 1, 1, 1),
+        )
+        self.btn.bind(on_release=self._handle_toggle)
+        right.add_widget(self.btn)
+
+        self.add_widget(left)
+        self.add_widget(right)
 
     # ── canvas helpers ────────────────────────────────────────────────────────
 
@@ -414,6 +427,7 @@ class RoomCard(BoxLayout):
         if not self._in_edit and self.collide_point(*touch.pos):
             self._lp_ox, self._lp_oy = touch.pos
             self._lp_touch_uid = touch.uid
+            self._lp_touch     = touch
             self._lp_event = Clock.schedule_once(self._do_long_press, 0.5)
         return super().on_touch_down(touch)
 
@@ -427,6 +441,7 @@ class RoomCard(BoxLayout):
     def on_touch_up(self, touch):
         if touch.uid == self._lp_touch_uid:
             self._lp_touch_uid = None
+            self._lp_touch     = None
             if self._lp_event:
                 self._lp_event.cancel()
                 self._lp_event = None
@@ -436,7 +451,7 @@ class RoomCard(BoxLayout):
         self._lp_event     = None
         self._long_pressed = True
         if self._on_long_press:
-            self._on_long_press()
+            self._on_long_press(self, self._lp_touch)
         else:
             RoomDetailModal(
                 room_name=self._room_name,
