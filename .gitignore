@@ -1,6 +1,7 @@
 # Credentials and runtime data — never commit these
 hue_settings.json
 hue_log.jsonl
+lumio_notes.txt
 
 # Python
 __pycache__/

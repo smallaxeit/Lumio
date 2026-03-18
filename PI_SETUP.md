@@ -8,9 +8,9 @@ Tested on **Raspberry Pi 4** with **Raspberry Pi OS Bookworm** (64-bit Desktop) 
 
 Use [Raspberry Pi Imager](https://www.raspberrypi.com/software/) to write **Raspberry Pi OS (64-bit) with Desktop** to your SD card.
 
-In the Imager's advanced options (gear icon) before writing:
+In the Imager's advanced options before writing:
 - Set hostname, username, and password
-- Enable SSH
+- **Enable SSH** — do this now or you'll lose remote access once the kiosk starts
 - Configure Wi-Fi if not using Ethernet
 
 Boot the Pi and connect via SSH or directly with a keyboard/monitor.
@@ -50,7 +50,7 @@ cd lumio
 
 ## 5. Create a virtual environment and install packages
 
-Raspberry Pi OS Bookworm uses an externally managed Python — a virtual environment is the cleanest approach.
+Raspberry Pi OS Bookworm uses an externally managed Python — a virtual environment is required.
 
 ```bash
 python3 -m venv .venv
@@ -63,8 +63,6 @@ For Supabase logging (optional):
 ```bash
 pip install supabase
 ```
-
-> The venv only needs to be activated once per terminal session. The autostart script below activates it automatically.
 
 ---
 
@@ -81,79 +79,128 @@ When prompted, **press the physical link button on top of the Hue Bridge**, then
 
 ---
 
-## 7. Configure for fullscreen
+## 7. Grant display permissions
 
-Open `hue_app.py` and change line 32:
-
-```python
-# Before (dev mode):
-DEV_WINDOW_SIZE = (800, 480)
-
-# After (Pi fullscreen):
-DEV_WINDOW_SIZE = None
-```
-
----
-
-## 8. Test the app
-
-From the Pi desktop terminal (or SSH with a display):
+The app renders directly on the framebuffer (DRM/KMS) for true fullscreen. Your user needs to be in the `render` and `video` groups:
 
 ```bash
-cd ~/lumio
-source .venv/bin/activate
-DISPLAY=:0 python hue_app.py
+sudo usermod -a -G render,video <username>
 ```
 
-The app should launch fullscreen on the touchscreen. Touch and slider input should work out of the box with the official DSI display.
-
-> If running headless over SSH, you need `DISPLAY=:0` to target the Pi's own screen. If you're running the command directly in a terminal on the Pi desktop, `DISPLAY=:0` can be omitted.
-
----
-
-## 9. Auto-start on boot
-
-Create an autostart entry so Lumio launches automatically when the desktop loads.
+Verify:
 
 ```bash
-mkdir -p ~/.config/autostart
-nano ~/.config/autostart/lumio.desktop
+groups <username>
 ```
 
-Paste the following (adjust username if not `pi`):
-
-```ini
-[Desktop Entry]
-Type=Application
-Name=Lumio
-Exec=/home/pi/lumio/.venv/bin/python /home/pi/lumio/hue_app.py
-Environment=DISPLAY=:0
-X-GNOME-Autostart-enabled=true
-```
-
-Save and exit (`Ctrl+O`, `Ctrl+X`). Lumio will now launch on every boot after the desktop loads.
-
-> **Hide the taskbar** for a cleaner kiosk look: right-click the taskbar → Panel Settings → Advanced → check "Minimise panel when not in use" or set size to 0.
+This takes effect after a reboot.
 
 ---
 
-## 10. Returning to the desktop
+## 8. Install the systemd service
 
-Lumio has no close button by design. To exit:
+The repo includes a ready-made service file. Copy it to the systemd directory and edit it with your username:
 
-- **Long-press the clock** (top-left, 1.5 seconds) — cleanly exits the app
-- Or SSH in and run `pkill -f hue_app.py`
+```bash
+sudo cp ~/lumio/lumio.service /etc/systemd/system/lumio.service
+sudo nano /etc/systemd/system/lumio.service
+```
+
+Replace all instances of `<username>` with your Pi username (e.g. `pi`, `pi1`). Save and exit (`Ctrl+O`, `Ctrl+X`).
+
+Enable and start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable lumio.service
+sudo systemctl start lumio.service
+```
+
+The app will now launch automatically on every boot.
+
+---
+
+## 9. Test
+
+Check the service is running:
+
+```bash
+sudo systemctl status lumio.service
+```
+
+View live logs:
+
+```bash
+journalctl -u lumio.service -f
+```
+
+---
+
+## Remote Access & Support
+
+### SSH (always available)
+
+SSH works regardless of what is on the screen — use it as your primary management tool:
+
+```bash
+ssh <username>@<pi-ip>
+```
+
+Find the Pi's IP:
+
+```bash
+hostname -I
+```
+
+Set a static IP or DHCP reservation on your router so it doesn't change.
+
+### VNC (desktop access)
+
+VNC shows the X11 desktop session. Since Lumio runs on the framebuffer (not X11), you need to stop the service first:
+
+```bash
+# SSH in, then:
+sudo systemctl stop lumio.service
+sudo systemctl start lightdm
+```
+
+Then connect with your VNC client. When done:
+
+```bash
+sudo systemctl start lumio.service
+# or just reboot
+```
+
+### Emergency terminal (no SSH)
+
+Plug a keyboard into the Pi and press **Ctrl+Alt+F2** to switch to a virtual terminal outside the kiosk.
+
+---
+
+## Service Management
+
+| Task | Command |
+|---|---|
+| Stop app | `sudo systemctl stop lumio.service` |
+| Start app | `sudo systemctl start lumio.service` |
+| Restart app | `sudo systemctl restart lumio.service` |
+| Disable autostart | `sudo systemctl disable lumio.service` |
+| Re-enable autostart | `sudo systemctl enable lumio.service` |
+| Check status | `sudo systemctl status lumio.service` |
+| Live logs | `journalctl -u lumio.service -f` |
 
 ---
 
 ## Troubleshooting
 
-**Kivy fails to find a display:**
-Make sure the desktop has fully loaded before Lumio tries to start. Add a short delay to the autostart if needed:
+**`Could not queue pageflip: -13` in logs:**
+Permission denied on the GPU device. Make sure your user is in the `render` and `video` groups (step 7) and reboot.
 
-```ini
-Exec=bash -c "sleep 5 && /home/pi/lumio/.venv/bin/python /home/pi/lumio/hue_app.py"
-```
+**Grey screen in VNC:**
+Lumio renders on the framebuffer, not X11. Stop the service and start lightdm before connecting with VNC (see Remote Access above).
+
+**App starts but won't connect to bridge:**
+Verify the bridge IP hasn't changed — check your router's DHCP table and update `bridge_ip` in `hue_settings.json` if needed.
 
 **Touch input not working:**
 The official 7" DSI display registers as `mtdev` input. Kivy picks it up automatically. If not, check `dmesg | grep input` to find the device name.
@@ -165,5 +212,9 @@ If the display is mounted upside down, add to `/boot/firmware/config.txt`:
 display_rotate=2
 ```
 
-**App won't connect to bridge:**
-Verify the bridge IP hasn't changed — check your router's DHCP table and update `bridge_ip` in `hue_settings.json` if needed.
+**Kivy fails to start (display not ready):**
+Add a startup delay to the service file:
+
+```ini
+ExecStartPre=/bin/sleep 5
+```

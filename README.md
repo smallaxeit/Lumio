@@ -127,12 +127,11 @@ python lumio.py
 
 **Raspberry Pi (fullscreen):**
 
-Set `DEV_WINDOW_SIZE = None` at the top of `lumio.py`, then:
 ```bash
-DISPLAY=:0 python lumio.py
+python lumio.py
 ```
 
-Or add to `/etc/rc.local` to launch on boot.
+The app runs directly on the framebuffer — true fullscreen with no desktop chrome. See [PI_SETUP.md](PI_SETUP.md) for autostart via systemd.
 
 ---
 

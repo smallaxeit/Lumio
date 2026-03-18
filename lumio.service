@@ -1,0 +1,16 @@
+[Unit]
+Description=Lumio Hue Control
+After=network.target
+
+[Service]
+# Replace <username> with your Pi username (e.g. pi, pi1)
+User=<username>
+WorkingDirectory=/home/<username>/lumio
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/<username>/.Xauthority
+ExecStart=/home/<username>/lumio/.venv/bin/python lumio.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target
