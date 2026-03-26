@@ -1,6 +1,6 @@
 # Lumio
 
-[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.5.1-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.5.1) ![Date](https://img.shields.io/badge/updated-2026--03--12-lightgrey)
+[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.6.0-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.6.0) ![Date](https://img.shields.io/badge/updated-2026--03--26-lightgrey)
 
 A touchscreen Philips Hue controller built with Python and Kivy, designed for a Raspberry Pi 4 with the official 7" display. Runs as a local full-screen panel — no cloud, no browser, no subscription.
 
@@ -34,8 +34,9 @@ python lumio.py
 
 **Weather detail**
 - Current temp (large), condition, wind speed
-- 5-day forecast — high/low, condition, precipitation chance
-- Tap any forecast day for an hourly breakdown (6am–10pm) with temp, condition, precip %, wind
+- 5-day forecast starting with Today — high/low, condition, precipitation chance, weather icon per day
+- Tap Today or any forecast day for a full 24-hour breakdown with temp, condition, precip %, wind
+- Today's hourly view starts at the current hour (past hours hidden)
 
 **Settings (☰ button)**
 - Light/dark theme toggle — persists across restarts
@@ -173,7 +174,7 @@ See `hue_settings.example.json` for the expected structure.
 | ☰ button | Open settings popup |
 | Dark Mode toggle (in settings) | Toggle dark/light theme (saved automatically) |
 | Tap weather text | Open weather detail card |
-| Tap a forecast day | Open hourly breakdown for that day |
+| Tap Today or a forecast day | Open 24-hour hourly breakdown for that day |
 
 ---
 
@@ -198,8 +199,8 @@ If IP geolocation fails (offline, VPN, restrictive network), the weather feature
 - **Header** — `72°F  Partly cloudy` (updates every 15 minutes)
 - **Weather card** — tap the header text to open:
   - Current temp, condition, wind speed
-  - 5-day forecast with high/low, condition, and precipitation chance
-- **Day detail** — tap any forecast day for an hourly view (6am–10pm)
+  - 5-day forecast starting with Today — high/low, condition, precip chance, and a weather icon per tile
+- **Day detail** — tap Today or any forecast day for a full 24-hour hourly view; Today's view starts at the current hour
 
 ### Disabling weather
 
@@ -318,6 +319,8 @@ lumio/
 ├── lumio_weather.py        # Open-Meteo weather fetching and IP geolocation
 ├── lumio_brightness.py     # Pi backlight brightness read/write
 ├── hue_discovery.py        # Bridge discovery and authentication (one-time setup)
+├── assets/
+│   └── weather/            # Meteocons PNG icons (MIT) — mapped to WMO weather codes
 ├── hue_settings.example.json  # Settings template (safe to commit)
 ├── hue_settings.json       # Your credentials and preferences (git-ignored)
 ├── hue_log.jsonl           # Event log (git-ignored)
@@ -365,6 +368,12 @@ git push origin v0.2.0
 ``
 
 ### Changelog
+
+## [0.6.0] - 2026-03-26
+### Added
+- Today tile added as the first card in the 5-day forecast grid (day 6 dropped to keep the grid at 5 tiles)
+- Weather icons (Meteocons, MIT) — small PNG icon in each forecast tile and in the day detail header, mapped to WMO weather codes
+- Full 24-hour hourly forecast — previously limited to 6am–10pm; today's view starts at the current hour, future days show all 24 hours
 
 ## [0.5.1] - 2026-03-12
 ### Fixed

@@ -8,6 +8,7 @@ from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.gridlayout import GridLayout
+from kivy.uix.image import Image
 from kivy.uix.label import Label
 from kivy.uix.modalview import ModalView
 from kivy.uix.scrollview import ScrollView
@@ -15,7 +16,7 @@ from kivy.uix.slider import Slider
 
 from theme import C, _TappableRow, _WeatherBtn, _DayCol, CARD_SPACING, SYMBOL_FONT
 from lumio_brightness import set_brightness
-from lumio_weather import _fetch_hourly
+from lumio_weather import _fetch_hourly, get_icon_path
 
 
 # ── SettingsPopup ─────────────────────────────────────────────────────────────
@@ -546,9 +547,9 @@ class WeatherModal(ModalView):
         # Spacer
         card.add_widget(BoxLayout(size_hint_y=None, height=6))
 
-        # 5-day forecast row (skip index 0 = today)
-        forecast = GridLayout(cols=5, size_hint_y=None, height=114, spacing=6)
-        for day in data['daily'][1:6]:
+        # 5-day forecast row — index 0 = Today, 1-4 = next four days
+        forecast = GridLayout(cols=5, size_hint_y=None, height=130, spacing=6)
+        for idx, day in enumerate(data['daily'][0:5]):
             col = _DayCol(orientation='vertical', spacing=2, padding=[0, 6, 0, 6])
             with col.canvas.before:
                 Color(*self._DAY_BG)
@@ -558,25 +559,38 @@ class WeatherModal(ModalView):
                 size=lambda w, _, r=d_rect: setattr(r, 'size', w.size),
             )
             if self._lat and self._lon:
-                col.bind(on_release=lambda inst, d=day: self._open_day_detail(d))
+                col.bind(on_release=lambda inst, d=day, i=idx: self._open_day_detail(d, i == 0))
+            day_label = "Today" if idx == 0 else day['day']
+            col.add_widget(Label(text=day_label, font_size="11sp", bold=True, color=self._SUB,
+                                 size_hint_y=None, height=18))
+            icon_path = get_icon_path(day.get('wcode', -1))
+            if icon_path:
+                col.add_widget(Image(source=icon_path, size_hint_y=None, height=32,
+                                     allow_stretch=True, keep_ratio=True))
+            else:
+                col.add_widget(BoxLayout(size_hint_y=None, height=32))
             cond_text = day['cond_short']
             if day.get('precip_pct', 0) > 0:
                 cond_text += f"  {day['precip_pct']}%"
-            col.add_widget(Label(text=day['day'],        font_size="12sp", bold=True, color=self._SUB))
-            col.add_widget(Label(text=cond_text,         font_size="11sp",            color=self._TEXT))
-            col.add_widget(Label(text=f"{day['high']}°", font_size="15sp", bold=True, color=self._TEMP))
-            col.add_widget(Label(text=f"{day['low']}°",  font_size="12sp",            color=self._SUB))
+            col.add_widget(Label(text=cond_text,         font_size="10sp", color=self._TEXT,
+                                 size_hint_y=None, height=16))
+            col.add_widget(Label(text=f"{day['high']}°", font_size="15sp", bold=True, color=self._TEMP,
+                                 size_hint_y=None, height=22))
+            col.add_widget(Label(text=f"{day['low']}°",  font_size="12sp", color=self._SUB,
+                                 size_hint_y=None, height=18))
             forecast.add_widget(col)
         card.add_widget(forecast)
 
         self.add_widget(card)
 
-    def _open_day_detail(self, day: dict):
+    def _open_day_detail(self, day: dict, is_today: bool = False):
         DayDetailModal(
-            day_name=day['day'],
+            day_name="Today" if is_today else day['day'],
             date_str=day['date'],
             lat=self._lat,
             lon=self._lon,
+            wmo_code=day.get('wcode', -1),
+            is_today=is_today,
         ).open()
 
 
@@ -594,7 +608,8 @@ class DayDetailModal(ModalView):
     _PRECIP = (0.45, 0.70, 1.00, 1)
     ROW_H   = 44
 
-    def __init__(self, day_name: str, date_str: str, lat: float, lon: float, **kwargs):
+    def __init__(self, day_name: str, date_str: str, lat: float, lon: float,
+                 wmo_code: int = -1, is_today: bool = False, **kwargs):
         super().__init__(
             background_color=(0, 0, 0, 0.80),
             size_hint=(0.92, 0.93),
@@ -604,6 +619,7 @@ class DayDetailModal(ModalView):
         self._lat      = lat
         self._lon      = lon
         self._date_str = date_str
+        self._is_today = is_today
 
         card = BoxLayout(orientation='vertical', padding=[20, 16, 20, 16], spacing=10)
         with card.canvas.before:
@@ -614,8 +630,12 @@ class DayDetailModal(ModalView):
             size=lambda *_: setattr(c_rect, 'size', card.size),
         )
 
-        # Header
-        hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=36)
+        # Header row: icon + date label + close button
+        hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=48, spacing=8)
+        icon_path = get_icon_path(wmo_code)
+        if icon_path:
+            hdr.add_widget(Image(source=icon_path, size_hint=(None, 1), width=44,
+                                 allow_stretch=True, keep_ratio=True))
         dt = datetime.fromisoformat(date_str)
         date_lbl = Label(
             text=f"{dt.strftime('%A')}  ·  {dt.strftime('%b')} {dt.day}",
@@ -662,7 +682,8 @@ class DayDetailModal(ModalView):
         row_list = GridLayout(cols=1, size_hint_y=None, spacing=3)
         row_list.bind(minimum_height=row_list.setter('height'))
 
-        for i, h in enumerate([x for x in hours if 6 <= x['hour'] <= 22]):
+        current_hour = datetime.now().hour if self._is_today else -1
+        for i, h in enumerate([x for x in hours if x['hour'] >= current_hour]):
             row = BoxLayout(
                 orientation='horizontal',
                 size_hint_y=None, height=self.ROW_H,

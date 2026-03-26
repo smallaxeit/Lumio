@@ -1,10 +1,13 @@
 """lumio_weather.py — Weather fetching via Open-Meteo and IP geolocation."""
 
+import os
 from datetime import datetime
 
 import requests
 
 from theme import save_settings
+
+_ICON_DIR = os.path.join(os.path.dirname(__file__), "assets", "weather")
 
 _WMO_CODES = {
     0: "Clear",
@@ -28,6 +31,42 @@ _WMO_SHORT = {
     85: "Sn Shower", 86: "Sn Shower",
     95: "T-Storm",   96: "T-Storm",   99: "T-Storm",
 }
+
+_WMO_ICON = {
+    0:  "clear-day",
+    1:  "partly-cloudy-day",
+    2:  "partly-cloudy-day",
+    3:  "overcast",
+    45: "fog-day",
+    48: "fog-day",
+    51: "partly-cloudy-day-drizzle",
+    53: "overcast-day-drizzle",
+    55: "overcast-drizzle",
+    61: "partly-cloudy-day-rain",
+    63: "overcast-day-rain",
+    65: "overcast-rain",
+    71: "partly-cloudy-day-snow",
+    73: "overcast-day-snow",
+    75: "overcast-snow",
+    77: "sleet",
+    80: "partly-cloudy-day-rain",
+    81: "overcast-day-rain",
+    82: "overcast-rain",
+    85: "partly-cloudy-day-snow",
+    86: "overcast-snow",
+    95: "thunderstorms-day",
+    96: "thunderstorms-day-rain",
+    99: "thunderstorms-overcast-rain",
+}
+
+
+def get_icon_path(wcode: int) -> str:
+    """Return absolute path to the PNG icon for a WMO weather code, or '' if missing."""
+    name = _WMO_ICON.get(wcode)
+    if not name:
+        return ""
+    path = os.path.join(_ICON_DIR, name + ".png")
+    return path if os.path.exists(path) else ""
 
 
 def _fetch_weather(lat: float, lon: float) -> dict:
@@ -63,6 +102,7 @@ def _fetch_weather(lat: float, lon: float) -> dict:
                 "condition":  _WMO_CODES.get(wcode, ""),
                 "cond_short": _WMO_SHORT.get(wcode, ""),
                 "precip_pct": precip,
+                "wcode":      wcode,
             })
 
         return {
