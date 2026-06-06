@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 lumio.py — Lumio Kivy touchscreen app for Raspberry Pi 4.
-Room grid with on/off toggle, brightness slider, and drag-to-reorder.
+Room grid with on/off toggle, brightness slider, and long-press-to-swap sort.
 Optimised for the official 7" Pi touchscreen (800×480).
 
 Requirements:
@@ -53,7 +53,7 @@ from lumio_log import (
 import lumio_log
 from lumio_brightness import set_brightness, get_brightness
 from lumio_weather import _fetch_weather, _resolve_location
-from ui_cards import RoomCard, DragGhost
+from ui_cards import RoomCard
 from ui_panels import SettingsPopup, WeatherModal, HeaderBar
 
 
@@ -64,8 +64,9 @@ class RoomGrid(BoxLayout):
     Root widget.
 
     Normal mode : Header + scrollable 2-col card grid.
-    Edit mode   : Scrolling disabled; cards draggable to reorder.
-                  Sliders hidden. New order saved to hue_settings.json on drop.
+    Edit mode   : Scrolling disabled; sliders hidden.
+                  Long-press a card to select it, long-press another to swap.
+                  New order saved to hue_settings.json on each swap.
     """
 
     def __init__(self, api: HueAPI, **kwargs):
@@ -88,11 +89,8 @@ class RoomGrid(BoxLayout):
         self._last_weather_data = None
         self._weather_wake      = threading.Event()
 
-        # Drag state
-        self._drag_card      = None
-        self._drag_ghost     = None
-        self._drag_target    = None
-        self._drag_touch_uid = None
+        # Sort state
+        self._swap_card = None   # card selected for swap (long-press-to-swap)
 
         with self.canvas.before:
             self._bg_color_inst = Color(*C.BG)
@@ -198,33 +196,41 @@ class RoomGrid(BoxLayout):
 
     def _toggle_edit(self):
         self._edit_mode = not self._edit_mode
+        if not self._edit_mode:
+            self._clear_swap_selection()
         self.header.set_edit_active(self._edit_mode)
         self.scroll.do_scroll_y = not self._edit_mode
         for card in self.cards.values():
             card.set_edit_mode(self._edit_mode)
 
-    def _enter_edit_with_drag(self, card, touch):
-        """Enter sort mode from a long-press and immediately begin dragging.
-
-        Called with the live touch so we can grab it before ScrollView claims
-        any subsequent move events — fixes the cascade/freeze on Pi touchscreen.
-        """
+    def _on_card_long_press(self, card):
         if not self._edit_mode:
             self._edit_mode = True
             self.header.set_edit_active(True)
             self.scroll.do_scroll_y = False
             for c in self.cards.values():
                 c.set_edit_mode(True)
-        if touch is None:
-            return
-        # Release any existing grab (e.g. ScrollView) and claim the touch ourselves.
-        for wr in list(touch.grab_list):
-            w = wr()
-            if w:
-                touch.ungrab(w)
-        touch.grab(self)
-        self._begin_drag(card, touch)
-        self._drag_touch_uid = touch.uid
+        self._select_for_swap(card)
+
+    def _select_for_swap(self, card):
+        if self._swap_card is card:
+            # long-press same card → deselect
+            card.highlight_as_target(False)
+            self._swap_card = None
+        elif self._swap_card is None:
+            # nothing selected yet → select this card
+            card.highlight_as_target(True)
+            self._swap_card = card
+        else:
+            # second card → swap and clear selection
+            self._swap_card.highlight_as_target(False)
+            self._swap_cards(self._swap_card, card)
+            self._swap_card = None
+
+    def _clear_swap_selection(self):
+        if self._swap_card:
+            self._swap_card.highlight_as_target(False)
+            self._swap_card = None
 
     # ── settings ──────────────────────────────────────────────────────────────
 
@@ -277,70 +283,6 @@ class RoomGrid(BoxLayout):
             if gid not in exempt:
                 card.turn_off()
 
-    # ── touch / drag ──────────────────────────────────────────────────────────
-
-    def on_touch_down(self, touch):
-        if self._edit_mode:
-            card = self._card_at(touch.pos)
-            if card:
-                self._begin_drag(card, touch)
-                self._drag_touch_uid = touch.uid
-                return True
-        return super().on_touch_down(touch)
-
-    def on_touch_move(self, touch):
-        if self._drag_touch_uid is not None and touch.uid == self._drag_touch_uid:
-            self._update_drag(touch)
-            return True
-        return super().on_touch_move(touch)
-
-    def on_touch_up(self, touch):
-        if self._drag_touch_uid is not None and touch.uid == self._drag_touch_uid:
-            self._end_drag(touch)
-            self._drag_touch_uid = None
-            touch.ungrab(self)
-            return True
-        return super().on_touch_up(touch)
-
-    def _card_at(self, win_pos):
-        for card in self.cards.values():
-            if card.collide_point(*card.parent.to_widget(*win_pos)):
-                return card
-        return None
-
-    def _begin_drag(self, card, touch):
-        self._drag_card = card
-        card.opacity    = 0.25
-        ghost = DragGhost(card._room_name, card.width, card.height)
-        ghost.center = touch.pos
-        Window.add_widget(ghost)
-        self._drag_ghost = ghost
-        print(f"[drag] started: {card._room_name}")
-
-    def _update_drag(self, touch):
-        if self._drag_ghost:
-            self._drag_ghost.center = touch.pos
-        target = self._card_at(touch.pos)
-        if target is self._drag_card:
-            target = None
-        if target is not self._drag_target:
-            if self._drag_target:
-                self._drag_target.highlight_as_target(False)
-            self._drag_target = target
-            if target:
-                target.highlight_as_target(True)
-
-    def _end_drag(self, touch):
-        if self._drag_ghost:
-            Window.remove_widget(self._drag_ghost)
-            self._drag_ghost = None
-        self._drag_card.opacity = 1.0
-        if self._drag_target:
-            self._drag_target.highlight_as_target(False)
-            self._swap_cards(self._drag_card, self._drag_target)
-        self._drag_card   = None
-        self._drag_target = None
-
     def _reading_order(self):
         """Grid children are stored back-to-front; return front-to-back."""
         return list(reversed(self.grid.children))
@@ -378,7 +320,7 @@ class RoomGrid(BoxLayout):
 
         for gid, group in visible:
             card = RoomCard(gid, group, self.api,
-                            on_long_press=self._enter_edit_with_drag,
+                            on_long_press=self._on_card_long_press,
                             size_hint_y=None, height=CARD_HEIGHT)
             self.cards[gid] = card
             self.grid.add_widget(card)

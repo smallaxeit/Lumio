@@ -1,9 +1,8 @@
-"""ui_cards.py — Room card, drag ghost, and per-light detail modal."""
+"""ui_cards.py — Room card and per-light detail modal."""
 
 import threading
 
 from kivy.clock import Clock, mainthread
-from kivy.core.window import Window
 from kivy.graphics import Color, RoundedRectangle
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -252,37 +251,6 @@ class RoomDetailModal(ModalView):
             ))
 
 
-# ── DragGhost ─────────────────────────────────────────────────────────────────
-
-class DragGhost(BoxLayout):
-    """
-    Semi-transparent floating card that follows the finger during a drag.
-    Added directly to Window so it renders above everything.
-    """
-
-    def __init__(self, name: str, w: float, h: float, **kwargs):
-        super().__init__(
-            orientation="vertical",
-            size_hint=(None, None),
-            size=(w, h),
-            **kwargs,
-        )
-        with self.canvas.before:
-            Color(0.00, 0.48, 1.00, 1.00)
-            self._rect = RoundedRectangle(radius=[10], pos=self.pos, size=self.size)
-        self.bind(pos=self._upd, size=self._upd)
-        self.add_widget(Label(
-            text=f"⠿  {name}",
-            font_size="18sp",
-            bold=True,
-            color=(1, 1, 1, 1),
-        ))
-
-    def _upd(self, *_):
-        self._rect.pos  = self.pos
-        self._rect.size = self.size
-
-
 # ── RoomCard ──────────────────────────────────────────────────────────────────
 
 class RoomCard(BoxLayout):
@@ -313,7 +281,6 @@ class RoomCard(BoxLayout):
         self._in_edit       = False
         self._lp_event      = None       # long-press timer
         self._lp_touch_uid  = None       # track touch without grabbing
-        self._lp_touch      = None       # touch object kept for drag handoff
         self._long_pressed  = False      # suppress button release after long press
         self._lp_ox = self._lp_oy = 0   # touch origin for move threshold
 
@@ -424,10 +391,9 @@ class RoomCard(BoxLayout):
     # ── long-press → sort mode ────────────────────────────────────────────────
 
     def on_touch_down(self, touch):
-        if not self._in_edit and self.collide_point(*touch.pos):
+        if self.collide_point(*touch.pos):
             self._lp_ox, self._lp_oy = touch.pos
             self._lp_touch_uid = touch.uid
-            self._lp_touch     = touch
             self._lp_event = Clock.schedule_once(self._do_long_press, 0.5)
         return super().on_touch_down(touch)
 
@@ -441,7 +407,6 @@ class RoomCard(BoxLayout):
     def on_touch_up(self, touch):
         if touch.uid == self._lp_touch_uid:
             self._lp_touch_uid = None
-            self._lp_touch     = None
             if self._lp_event:
                 self._lp_event.cancel()
                 self._lp_event = None
@@ -451,7 +416,7 @@ class RoomCard(BoxLayout):
         self._lp_event     = None
         self._long_pressed = True
         if self._on_long_press:
-            self._on_long_press(self, self._lp_touch)
+            self._on_long_press(self)
         else:
             RoomDetailModal(
                 room_name=self._room_name,

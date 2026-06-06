@@ -22,7 +22,7 @@ python lumio.py
 - Room grid with on/off toggle and brightness slider
 - Real-time updates via Hue CLIP v2 SSE event stream
 - Per-room light detail (long-press a room card)
-- Drag-to-reorder rooms
+- Long-press-to-swap room reordering (works reliably on Pi touchscreen)
 - Event logging (on/off, brightness, source, timestamp) to `hue_log.jsonl`
 
 **Header**
@@ -146,7 +146,7 @@ All settings are stored in `hue_settings.json` (auto-created, never committed):
 | `username` | `hue_discovery.py` | Hue API key |
 | `hidden_rooms` | Settings popup | Room IDs hidden from the grid |
 | `exempt_rooms` | Settings popup | Room IDs excluded from the All Off button |
-| `room_order` | Drag to reorder | Saved card order |
+| `room_order` | Long-press sort | Saved card order |
 | `dark_mode` | Theme toggle | `true` = dark, `false` = light |
 | `screen_brightness` | Settings popup | Pi backlight level (10–255) |
 | `show_weather` | Settings popup | `true` / `false` |
@@ -168,9 +168,10 @@ See `hue_settings.example.json` for the expected structure.
 |---|---|
 | Tap a card | Toggle room on/off |
 | Drag the slider | Adjust room brightness |
-| Long-press a card | Enter sort mode (sliders hidden, cards draggable) |
-| ✔ button | Exit sort mode and save order |
-| Drag a card in sort mode | Reorder rooms |
+| Long-press a card | Enter sort mode (sliders hidden); card highlights blue |
+| Long-press another card in sort mode | Swap the two cards; order saves immediately |
+| Long-press the selected card in sort mode | Deselect it |
+| ✔ button | Exit sort mode |
 | ☰ button | Open settings popup |
 | Dark Mode toggle (in settings) | Toggle dark/light theme (saved automatically) |
 | Tap weather text | Open weather detail card |
@@ -312,7 +313,7 @@ All light changes are written to `hue_log.jsonl` (one JSON object per line). Thi
 lumio/
 ├── lumio.py                # Entry point — RoomGrid, ErrorScreen, LumioApp
 ├── theme.py                # Palette, mutable color container (C), shared constants
-├── ui_cards.py             # RoomCard, LightRow, RoomDetailModal, DragGhost
+├── ui_cards.py             # RoomCard, LightRow, RoomDetailModal
 ├── ui_panels.py            # SettingsPopup, WeatherModal, DayDetailModal, HeaderBar
 ├── lumio_api.py            # HueAPI — Hue local REST + CLIP v2 SSE client
 ├── lumio_log.py            # Event logging (local JSONL) and Supabase sync
@@ -368,6 +369,10 @@ git push origin v0.2.0
 ``
 
 ### Changelog
+
+## [0.6.1] - 2026-06-06
+### Fixed
+- Room sort replaced drag-to-reorder with long-press-to-swap — eliminates visual artifacts and unresponsive cards caused by unreliable touch grab on Pi framebuffer. Long-press card A to select (highlights blue), long-press card B to swap; long-press selected card to deselect.
 
 ## [0.6.0] - 2026-03-26
 ### Added
