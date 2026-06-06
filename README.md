@@ -1,6 +1,6 @@
 # Lumio
 
-[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.6.0-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.6.0) ![Date](https://img.shields.io/badge/updated-2026--03--26-lightgrey)
+[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.6.3-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.6.3) ![Date](https://img.shields.io/badge/updated-2026--06--06-lightgrey)
 
 A touchscreen Philips Hue controller built with Python and Kivy, designed for a Raspberry Pi 4 with the official 7" display. Runs as a local full-screen panel — no cloud, no browser, no subscription.
 
@@ -22,7 +22,7 @@ python lumio.py
 - Room grid with on/off toggle and brightness slider
 - Real-time updates via Hue CLIP v2 SSE event stream
 - Per-room light detail (long-press a room card)
-- Long-press-to-swap room reordering (works reliably on Pi touchscreen)
+- Room reordering via ▲▼ per-card buttons in sort mode — reliable on Pi touchscreen with no gesture jitter
 - Event logging (on/off, brightness, source, timestamp) to `hue_log.jsonl`
 
 **Header**
@@ -30,7 +30,7 @@ python lumio.py
 - Local weather — current temp + condition, refreshes every 15 min, shown just right of the hamburger
   - Location detected automatically via IP geolocation on first run (no API key needed)
   - Tap the weather text to open the full weather detail card
-- ✔ confirm button (right) — appears only in sort mode (long-press a card to enter)
+- ↕ sort button (right, always visible) — tap to enter sort mode; becomes ✔ to exit
 
 **Weather detail**
 - Current temp (large), condition, wind speed
@@ -146,7 +146,7 @@ All settings are stored in `hue_settings.json` (auto-created, never committed):
 | `username` | `hue_discovery.py` | Hue API key |
 | `hidden_rooms` | Settings popup | Room IDs hidden from the grid |
 | `exempt_rooms` | Settings popup | Room IDs excluded from the All Off button |
-| `room_order` | Long-press sort | Saved card order |
+| `room_order` | Sort mode (▲▼) | Saved card order |
 | `dark_mode` | Theme toggle | `true` = dark, `false` = light |
 | `screen_brightness` | Settings popup | Pi backlight level (10–255) |
 | `show_weather` | Settings popup | `true` / `false` |
@@ -168,10 +168,9 @@ See `hue_settings.example.json` for the expected structure.
 |---|---|
 | Tap a card | Toggle room on/off |
 | Drag the slider | Adjust room brightness |
-| Long-press a card | Enter sort mode (sliders hidden); card highlights blue |
-| Long-press another card in sort mode | Swap the two cards; order saves immediately |
-| Long-press the selected card in sort mode | Deselect it |
-| ✔ button | Exit sort mode |
+| Tap ↕ (header right) | Enter sort mode — sliders hidden, ▲▼ shown on each card |
+| Tap ▲ or ▼ on a card | Move that card one row up or down; order saves immediately |
+| Tap ✔ (replaces ↕ in sort mode) | Exit sort mode |
 | ☰ button | Open settings popup |
 | Dark Mode toggle (in settings) | Toggle dark/light theme (saved automatically) |
 | Tap weather text | Open weather detail card |
@@ -366,9 +365,21 @@ This project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PA
 ```bash
 git tag -a v0.2.0 -m "Add clock, weather, brightness control, theme persistence"
 git push origin v0.2.0
-``
+```
 
 ### Changelog
+
+## [0.6.3] - 2026-06-06
+### Changed
+- Sort ▲▼ buttons are now side-by-side (▲ left, ▼ right) and larger (20sp) — better touch targets on Pi
+- Long-press to enter sort mode removed entirely; ↕ header button is the only entry point
+- ▲▼ buttons now use the symbol font (Segoe UI Symbol / DejaVu Sans) so glyphs render on both Windows and Pi
+
+## [0.6.2] - 2026-06-06
+### Changed
+- Sort mode now uses ▲▼ per-card buttons instead of long-press-to-swap — eliminates touch-jitter failures on Pi framebuffer
+- ↕ sort button is now always visible in the header right (was hidden until sort mode was active); tap to enter, becomes ✔ to exit
+- Weather label font bumped to 19sp for easier reading
 
 ## [0.6.1] - 2026-06-06
 ### Fixed

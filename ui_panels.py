@@ -732,7 +732,7 @@ class DayDetailModal(ModalView):
 # ── HeaderBar ─────────────────────────────────────────────────────────────────
 
 class HeaderBar(BoxLayout):
-    """Top bar: ☰ settings | weather/status label | ✔ sort-confirm (sort mode only)."""
+    """Top bar: ☰ settings | weather/status label | ↕ sort-toggle (always visible)."""
 
     def __init__(self, on_edit_toggle, on_theme_toggle, on_settings_open,
                  on_weather_tap=None, on_all_off=None, **kwargs):
@@ -772,7 +772,7 @@ class HeaderBar(BoxLayout):
         # Weather label — just right of hamburger, fills remaining space
         self.weather_lbl = _WeatherBtn(
             text="",
-            font_size="16sp",
+            font_size="19sp",
             bold=True,
             color=C.TEXT,
             halign="left",
@@ -783,16 +783,15 @@ class HeaderBar(BoxLayout):
         if on_weather_tap:
             self.weather_lbl.bind(on_release=lambda _: on_weather_tap())
 
-        # Sort/edit confirm button — hidden until sort mode is active
-        # (long-press a card to enter sort mode; this button exits it)
+        # Sort toggle button — always visible; ↕ enters sort mode, ✔ exits it
         self.edit_btn = Button(
-            text="✔",
+            text="↕",
             font_name=SYMBOL_FONT or 'Roboto',
             font_size="20sp",
             size_hint=(None, 0.85),
-            width=0,
-            opacity=0,
-            disabled=True,
+            width=46,
+            opacity=1,
+            disabled=False,
             background_normal="",
             background_down="",
             background_color=(0, 0, 0, 0),
@@ -827,9 +826,7 @@ class HeaderBar(BoxLayout):
         self._rect.size = self.size
 
     def set_edit_active(self, active: bool):
-        self.edit_btn.width    = 46 if active else 0
-        self.edit_btn.opacity  = 1  if active else 0
-        self.edit_btn.disabled = not active
+        self.edit_btn.text = "✔" if active else "↕"
 
     def set_theme_label(self, dark_mode: bool):
         pass  # theme toggle moved into settings popup

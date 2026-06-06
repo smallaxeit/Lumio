@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 lumio.py — Lumio Kivy touchscreen app for Raspberry Pi 4.
-Room grid with on/off toggle, brightness slider, and long-press-to-swap sort.
+Room grid with on/off toggle, brightness slider, and ▲▼ sort mode.
 Optimised for the official 7" Pi touchscreen (800×480).
 
 Requirements:
@@ -64,9 +64,9 @@ class RoomGrid(BoxLayout):
     Root widget.
 
     Normal mode : Header + scrollable 2-col card grid.
-    Edit mode   : Scrolling disabled; sliders hidden.
-                  Long-press a card to select it, long-press another to swap.
-                  New order saved to hue_settings.json on each swap.
+    Edit mode   : Scrolling disabled; sliders replaced by ▲▼ arrows per card.
+                  Tap ▲/▼ to move a card one row up/down in its column.
+                  New order saved to hue_settings.json on each move.
     """
 
     def __init__(self, api: HueAPI, **kwargs):
@@ -88,9 +88,6 @@ class RoomGrid(BoxLayout):
         self._last_weather      = ""
         self._last_weather_data = None
         self._weather_wake      = threading.Event()
-
-        # Sort state
-        self._swap_card = None   # card selected for swap (long-press-to-swap)
 
         with self.canvas.before:
             self._bg_color_inst = Color(*C.BG)
@@ -196,41 +193,10 @@ class RoomGrid(BoxLayout):
 
     def _toggle_edit(self):
         self._edit_mode = not self._edit_mode
-        if not self._edit_mode:
-            self._clear_swap_selection()
         self.header.set_edit_active(self._edit_mode)
         self.scroll.do_scroll_y = not self._edit_mode
         for card in self.cards.values():
             card.set_edit_mode(self._edit_mode)
-
-    def _on_card_long_press(self, card):
-        if not self._edit_mode:
-            self._edit_mode = True
-            self.header.set_edit_active(True)
-            self.scroll.do_scroll_y = False
-            for c in self.cards.values():
-                c.set_edit_mode(True)
-        self._select_for_swap(card)
-
-    def _select_for_swap(self, card):
-        if self._swap_card is card:
-            # long-press same card → deselect
-            card.highlight_as_target(False)
-            self._swap_card = None
-        elif self._swap_card is None:
-            # nothing selected yet → select this card
-            card.highlight_as_target(True)
-            self._swap_card = card
-        else:
-            # second card → swap and clear selection
-            self._swap_card.highlight_as_target(False)
-            self._swap_cards(self._swap_card, card)
-            self._swap_card = None
-
-    def _clear_swap_selection(self):
-        if self._swap_card:
-            self._swap_card.highlight_as_target(False)
-            self._swap_card = None
 
     # ── settings ──────────────────────────────────────────────────────────────
 
@@ -287,12 +253,18 @@ class RoomGrid(BoxLayout):
         """Grid children are stored back-to-front; return front-to-back."""
         return list(reversed(self.grid.children))
 
-    def _swap_cards(self, card_a, card_b):
-        ordered = self._reading_order()
-        ia, ib  = ordered.index(card_a), ordered.index(card_b)
-        ordered[ia], ordered[ib] = ordered[ib], ordered[ia]
+    def _move_card(self, card, direction: str):
+        """Move card one row up or down in its column (called by ▲▼ buttons)."""
+        cards = [w for w in self._reading_order() if isinstance(w, RoomCard)]
+        idx = cards.index(card)
+        new_idx = idx + (-CARD_COLS if direction == "up" else CARD_COLS)
+        if new_idx < 0 or new_idx >= len(cards):
+            return
+        full = self._reading_order()
+        ia, ib = full.index(cards[idx]), full.index(cards[new_idx])
+        full[ia], full[ib] = full[ib], full[ia]
         self.grid.clear_widgets()
-        for w in ordered:
+        for w in full:
             self.grid.add_widget(w)
         new_order = [w.group_id for w in self._reading_order() if isinstance(w, RoomCard)]
         self._settings["room_order"] = new_order
@@ -320,13 +292,17 @@ class RoomGrid(BoxLayout):
 
         for gid, group in visible:
             card = RoomCard(gid, group, self.api,
-                            on_long_press=self._on_card_long_press,
+                            on_move=self._move_card,
                             size_hint_y=None, height=CARD_HEIGHT)
             self.cards[gid] = card
             self.grid.add_widget(card)
 
         if len(visible) % CARD_COLS != 0:
             self.grid.add_widget(BoxLayout())   # pad to even columns
+
+        if self._edit_mode:
+            for card in self.cards.values():
+                card.set_edit_mode(True)
 
         # Rebuild light → group map for SSE routing
         self._light_to_group = {}
