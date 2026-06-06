@@ -22,13 +22,13 @@ python lumio.py
 |-----------|------------|
 | ![Dark mode — room grid with all lights off](assets/screenshots/dark-mode.png) | ![Light mode — room grid with all lights off](assets/screenshots/light-mode.png) |
 
-| Sort Mode | Settings |
-|-----------|----------|
-| ![Sort mode — ▲▼ arrows on each card, ✔ in header to exit](assets/screenshots/sort-mode.png) | ![Settings popup — brightness, dark mode, weather, displayed rooms](assets/screenshots/settings.png) |
+| Sort Mode | Weather Forecast |
+|-----------|-----------------|
+| ![Sort mode — ▲▼ arrows on each card, ✔ in header to exit](assets/screenshots/sort-mode.png) | ![Weather forecast — 5-day card with temps and conditions](assets/screenshots/weather-forecast.png) |
 
-| Weather Forecast | Hourly Detail |
-|------------------|---------------|
-| ![Weather forecast — 5-day card with temps and conditions](assets/screenshots/weather-forecast.png) | ![Hourly weather detail — time, temp, condition, precip, wind](assets/screenshots/weather-hourly.png) |
+| Hourly Detail | Settings |
+|---------------|----------|
+| ![Hourly weather detail — time, temp, condition, precip, wind](assets/screenshots/weather-hourly.png) | ![Settings popup — brightness, dark mode, weather, displayed rooms](assets/screenshots/settings.png) |
 
 ---
 
