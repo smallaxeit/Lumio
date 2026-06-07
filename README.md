@@ -1,6 +1,6 @@
 # Lumio
 
-[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.6.3-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.6.3) ![Date](https://img.shields.io/badge/updated-2026--06--06-lightgrey)
+[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.7.0-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.7.0) ![Date](https://img.shields.io/badge/updated-2026--06--07-lightgrey)
 
 A touchscreen Philips Hue controller built with Python and Kivy, designed for a Raspberry Pi 4 with the official 7" display. Runs as a local full-screen panel — no cloud, no browser, no subscription.
 
@@ -30,6 +30,10 @@ python lumio.py
 |---------------|----------|
 | ![Hourly weather detail — time, temp, condition, precip, wind](assets/screenshots/weather-hourly.png) | ![Settings popup — brightness, dark mode, weather, displayed rooms](assets/screenshots/settings.png) |
 
+| Weather Kiosk |
+|---------------|
+| ![Weather kiosk — full-screen ambient view with live sky gradient, sun arc, drifting clouds, current conditions, stat grid, and 5-day forecast](assets/screenshots/weather-kiosk.png) |
+
 ---
 
 ## Features
@@ -43,7 +47,7 @@ python lumio.py
 
 **Header**
 - ☰ hamburger button (left) — opens the settings popup
-- Local weather — current temp + condition, refreshes every 15 min, shown just right of the hamburger
+- Local weather — current temp + condition, refreshes every 2 min (configurable via `weather_poll_seconds`), shown just right of the hamburger
   - Location detected automatically via IP geolocation on first run (no API key needed)
   - Tap the weather text to open the full weather detail card
 - ↕ sort button (right, always visible) — tap to enter sort mode; becomes ✔ to exit
@@ -53,6 +57,13 @@ python lumio.py
 - 5-day forecast starting with Today — high/low, condition, precipitation chance, weather icon per day
 - Tap Today or any forecast day for a full 24-hour breakdown with temp, condition, precip %, wind
 - Today's hourly view starts at the current hour (past hours hidden)
+- ⛶ button opens the **Weather Kiosk** — a full-screen ambient view (see below)
+
+**Weather Kiosk**
+- Full-screen alternative to the room grid — one tap from the weather card's ⛶ button, one tap (←) back
+- Procedurally generated visuals that react to live data: sky gradient that shifts with real sunrise/sunset and cloud cover, a glowing sun/moon that travels an arc tracking actual elapsed daylight, and softly drifting translucent clouds scaled to current cloud cover
+- Glass-card panels for current conditions (temp, icon, condition, "feels like"), a stat grid (humidity, UV index + category, wind, gusts, pressure, visibility, cloud cover, sunrise/sunset), and the same 5-day forecast strip — tap a day for the hourly breakdown
+- Live clock; everything refreshes on the existing weather poll cadence (`weather_poll_seconds`, default 120s) — no extra network requests
 
 **Settings (☰ button)**
 - Light/dark theme toggle — persists across restarts
@@ -166,6 +177,7 @@ All settings are stored in `hue_settings.json` (auto-created, never committed):
 | `dark_mode` | Theme toggle | `true` = dark, `false` = light |
 | `screen_brightness` | Settings popup | Pi backlight level (10–255) |
 | `show_weather` | Settings popup | `true` / `false` |
+| `weather_poll_seconds` | Manual | Seconds between weather refreshes (default `120`) |
 | `latitude` | Auto (IP geolocation) | Used for weather — set on first run |
 | `longitude` | Auto (IP geolocation) | Used for weather — set on first run |
 | `city` | Auto (IP geolocation) | Displayed in weather card |
@@ -212,7 +224,7 @@ If IP geolocation fails (offline, VPN, restrictive network), the weather feature
 
 ### What's shown
 
-- **Header** — `72°F  Partly cloudy` (updates every 15 minutes)
+- **Header** — `72°F  Partly cloudy` (updates every `weather_poll_seconds`, default 120s)
 - **Weather card** — tap the header text to open:
   - Current temp, condition, wind speed
   - 5-day forecast starting with Today — high/low, condition, precip chance, and a weather icon per tile
@@ -384,6 +396,14 @@ git push origin v0.2.0
 ```
 
 ### Changelog
+
+## [0.7.0] - 2026-06-07
+### Added
+- **Weather Kiosk** — full-screen ambient weather view, reachable via a new ⛶ button in the weather popup; ← button returns to the room grid
+- Procedurally generated ambient visuals: sky gradient driven by real sunrise/sunset and cloud cover, a sun/moon arc tracking actual elapsed daylight, drifting translucent clouds scaled to cloud cover
+- Richer current-conditions data (feels like, humidity, UV index + category, pressure, visibility, cloud cover, wind gusts, sunrise/sunset) via Open-Meteo's `current=` parameter — same request, no extra polling
+### Changed
+- `lumio_weather.py` switched from the legacy `current_weather=true` query to the richer `current=`/`daily=` parameter list
 
 ## [0.6.3] - 2026-06-06
 ### Changed

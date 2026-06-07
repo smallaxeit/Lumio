@@ -55,6 +55,7 @@ from lumio_brightness import set_brightness, get_brightness
 from lumio_weather import _fetch_weather, _resolve_location
 from ui_cards import RoomCard
 from ui_panels import SettingsPopup, WeatherModal, HeaderBar
+from ui_weather_kiosk import WeatherKiosk
 
 
 # ── RoomGrid ──────────────────────────────────────────────────────────────────
@@ -88,6 +89,7 @@ class RoomGrid(BoxLayout):
         self._last_weather      = ""
         self._last_weather_data = None
         self._weather_wake      = threading.Event()
+        self._kiosk             = None   # WeatherKiosk, built lazily on first expand
 
         with self.canvas.before:
             self._bg_color_inst = Color(*C.BG)
@@ -172,12 +174,14 @@ class RoomGrid(BoxLayout):
                     self._last_weather      = data["label"]
                     self._last_weather_data = data
                     self._update_weather(data["label"])
-            self._weather_wake.wait(timeout=900)
+            self._weather_wake.wait(timeout=self._settings.get("weather_poll_seconds", 120))
             self._weather_wake.clear()
 
     @mainthread
     def _update_weather(self, text: str):
         self.header.set_weather(text)
+        if self._kiosk is not None and self._kiosk.parent is not None:
+            self._push_weather_to_kiosk()
 
     def _open_weather(self):
         if not self._last_weather_data:
@@ -187,7 +191,32 @@ class RoomGrid(BoxLayout):
             city=self._settings.get("city", ""),
             lat=self._settings.get("latitude"),
             lon=self._settings.get("longitude"),
+            on_expand=self._show_weather_kiosk,
         ).open()
+
+    def _push_weather_to_kiosk(self):
+        self._kiosk.update(
+            data=self._last_weather_data,
+            city=self._settings.get("city", ""),
+            lat=self._settings.get("latitude"),
+            lon=self._settings.get("longitude"),
+        )
+
+    def _show_weather_kiosk(self):
+        if not self._last_weather_data:
+            return
+        if self._kiosk is None:
+            self._kiosk = WeatherKiosk(on_back=self._show_room_grid)
+        self._push_weather_to_kiosk()
+        self.remove_widget(self.header)
+        self.remove_widget(self.scroll)
+        self.add_widget(self._kiosk)
+
+    def _show_room_grid(self):
+        if self._kiosk is not None:
+            self.remove_widget(self._kiosk)
+        self.add_widget(self.header)
+        self.add_widget(self.scroll)
 
     # ── edit mode ─────────────────────────────────────────────────────────────
 

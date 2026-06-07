@@ -69,22 +69,33 @@ def get_icon_path(wcode: int) -> str:
     return path if os.path.exists(path) else ""
 
 
+def _fmt_time(iso_str: str) -> str:
+    """Format an ISO datetime string ('2026-06-07T06:14') as '6:14 AM'."""
+    try:
+        return datetime.fromisoformat(iso_str).strftime("%I:%M %p").lstrip("0")
+    except Exception:
+        return ""
+
+
 def _fetch_weather(lat: float, lon: float) -> dict:
     """Return weather dict with current + 5-day forecast, or None on error."""
     try:
         url = (
             "https://api.open-meteo.com/v1/forecast"
             f"?latitude={lat}&longitude={lon}"
-            "&current_weather=true"
-            "&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max"
+            "&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
+            "uv_index,pressure_msl,visibility,cloud_cover,wind_speed_10m,"
+            "wind_gusts_10m,weathercode,is_day"
+            "&daily=temperature_2m_max,temperature_2m_min,weathercode,"
+            "precipitation_probability_max,sunrise,sunset"
             "&temperature_unit=fahrenheit&wind_speed_unit=mph"
             "&timezone=auto&forecast_days=6"
         )
         r = requests.get(url, timeout=8)
         r.raise_for_status()
         body = r.json()
-        cw   = body["current_weather"]
-        temp = round(cw["temperature"])
+        cw   = body["current"]
+        temp = round(cw["temperature_2m"])
         code = int(cw["weathercode"])
         cond = _WMO_CODES.get(code, "")
 
@@ -106,11 +117,24 @@ def _fetch_weather(lat: float, lon: float) -> dict:
             })
 
         return {
-            "label":     f"{temp}°F  {cond}" if cond else f"{temp}°F",
-            "temp":      temp,
-            "condition": cond,
-            "wind_mph":  round(cw["windspeed"]),
-            "daily":     daily,
+            "label":        f"{temp}°F  {cond}" if cond else f"{temp}°F",
+            "temp":         temp,
+            "condition":    cond,
+            "wcode":        code,
+            "wind_mph":     round(cw["wind_speed_10m"]),
+            "feels_like":   round(cw["apparent_temperature"]),
+            "humidity":     round(cw["relative_humidity_2m"]),
+            "uv_index":     round(cw["uv_index"], 1),
+            "pressure_in":  round(cw["pressure_msl"] * 0.02953, 2),
+            "visibility_mi": round(cw["visibility"] / 1609.34, 1),
+            "cloud_pct":    round(cw["cloud_cover"]),
+            "wind_gusts":   round(cw["wind_gusts_10m"]),
+            "is_day":       bool(cw["is_day"]),
+            "sunrise":      d.get("sunrise", [""])[0],
+            "sunset":       d.get("sunset", [""])[0],
+            "sunrise_label": _fmt_time(d.get("sunrise", [""])[0]),
+            "sunset_label":  _fmt_time(d.get("sunset", [""])[0]),
+            "daily":        daily,
         }
     except Exception:
         return None

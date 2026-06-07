@@ -480,7 +480,7 @@ class WeatherModal(ModalView):
     _SUB    = (0.52, 0.60, 0.82, 1)
     _DAY_BG = (0.13, 0.18, 0.32, 1)
 
-    def __init__(self, data: dict, city: str, lat=None, lon=None, **kwargs):
+    def __init__(self, data: dict, city: str, lat=None, lon=None, on_expand=None, **kwargs):
         super().__init__(
             background_color=(0, 0, 0, 0.70),
             size_hint=(0.92, 0.88),
@@ -489,6 +489,7 @@ class WeatherModal(ModalView):
         )
         self._lat = lat
         self._lon = lon
+        self._on_expand = on_expand
 
         card = BoxLayout(orientation='vertical', padding=[20, 16, 20, 16], spacing=10)
         with card.canvas.before:
@@ -499,7 +500,7 @@ class WeatherModal(ModalView):
             size=lambda *_: setattr(c_rect, 'size', card.size),
         )
 
-        # Header: city + close
+        # Header: city + expand-to-kiosk + close
         hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=36)
         city_lbl = Label(
             text=city or "Weather",
@@ -508,6 +509,17 @@ class WeatherModal(ModalView):
             halign="left", valign="middle",
         )
         city_lbl.bind(size=lambda w, _: setattr(w, 'text_size', (w.width, None)))
+        hdr.add_widget(city_lbl)
+        if self._on_expand:
+            expand_btn = Button(
+                text="⛶", font_name=SYMBOL_FONT or 'Roboto', font_size="18sp",
+                size_hint=(None, 1), width=40,
+                background_normal="", background_down="",
+                background_color=(0, 0, 0, 0),
+                color=self._SUB,
+            )
+            expand_btn.bind(on_release=self._on_expand_tap)
+            hdr.add_widget(expand_btn)
         close_btn = Button(
             text="×", font_size="22sp",
             size_hint=(None, 1), width=40,
@@ -516,7 +528,6 @@ class WeatherModal(ModalView):
             color=self._SUB,
         )
         close_btn.bind(on_release=lambda _: self.dismiss())
-        hdr.add_widget(city_lbl)
         hdr.add_widget(close_btn)
         card.add_widget(hdr)
 
@@ -582,6 +593,10 @@ class WeatherModal(ModalView):
         card.add_widget(forecast)
 
         self.add_widget(card)
+
+    def _on_expand_tap(self, *_):
+        self.dismiss()
+        self._on_expand()
 
     def _open_day_detail(self, day: dict, is_today: bool = False):
         DayDetailModal(
