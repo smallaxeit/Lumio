@@ -9,10 +9,11 @@ so the look stays consistent regardless of the app theme.
 
 import math
 import random
+import threading
 from datetime import datetime, timedelta
 
 from kivy.animation import Animation
-from kivy.clock import Clock
+from kivy.clock import Clock, mainthread
 from kivy.graphics import Color, Ellipse, Line, Rectangle, RoundedRectangle
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -24,14 +25,21 @@ from kivy.uix.widget import Widget
 
 from theme import SYMBOL_FONT, _DayCol
 from lumio_weather import get_icon_path
+from lumio_log import log_event, _mark_huecontrol
 from ui_panels import DayDetailModal
 
 # ── Palette (always dark navy, matches WeatherModal) ───────────────────────────
 
 _TEXT   = (0.92, 0.94, 1.00, 1)
 _SUB    = (0.52, 0.60, 0.82, 1)
+# _SUB reads fine on the dark glass cards but nearly disappears directly over
+# the bright daytime sky (similar blue-gray hue/luminosity) — translucent white
+# stays legible at any time of day for header text like "Updated H:MM AM/PM".
+_SUB_SKY = (0.92, 0.94, 1.00, 0.55)
 _TEMP   = (0.95, 0.75, 0.25, 1)
-_CARD   = (0.13, 0.18, 0.32, 0.55)
+# Card fills are nearly opaque on purpose — at lower alpha the sun/moon glow
+# bleeds through from behind and washes out the text as a smudge mid-card.
+_CARD   = (0.12, 0.16, 0.29, 0.88)
 
 # Sky gradient stops — (top_rgb, bottom_rgb), blended by time of day + desaturated
 # toward gray by cloud cover. Night wraps both ends of the day.
@@ -385,9 +393,10 @@ class _PrecipLayer(Widget):
 # ── Glass card ─────────────────────────────────────────────────────────────────
 
 class _GlassCard(BoxLayout):
-    """Translucent rounded panel — frosted-glass look over the ambient sky."""
+    """Nearly-opaque rounded panel over the ambient sky — see _CARD comment:
+    too translucent and the sun/moon glow bleeds through as a smudge."""
 
-    _FILL   = (0.14, 0.19, 0.34, 0.50)
+    _FILL   = (0.13, 0.17, 0.30, 0.88)
     _BORDER = (0.62, 0.72, 0.92, 0.28)
 
     def __init__(self, **kwargs):
@@ -407,15 +416,76 @@ class _GlassCard(BoxLayout):
         self._border.rounded_rectangle = (self.x, self.y, self.width, self.height, 16)
 
 
+# ── Favorite-room quick toggles ────────────────────────────────────────────────
+
+_FAV_ON       = (0.95, 0.75, 0.25, 1)   # amber — matches _TEMP, reads as "on"
+_FAV_OFF      = (0.20, 0.27, 0.42, 1)   # muted navy — reads as "off"
+_FAV_ON_TEXT  = (0.12, 0.12, 0.16, 1)
+
+
+class _FavToggle(Button):
+    """Compact on/off toggle for one favorite room. Mirrors RoomCard's toggle
+    flow — optimistic UI, threaded API call, event log, rollback on error —
+    so a kiosk tap behaves identically to a grid-card tap."""
+
+    def __init__(self, gid, name, is_on, api, **kwargs):
+        super().__init__(
+            font_size="14sp", bold=True,
+            size_hint=(None, 1), width=92,
+            background_normal="", background_down="",
+            **kwargs,
+        )
+        self.gid      = gid
+        self._name    = name
+        self._api     = api
+        self._is_on   = is_on
+        self._pending = False
+        self._refresh()
+        self.bind(on_release=self._handle_toggle)
+
+    def set_state(self, is_on):
+        if not self._pending:
+            self._is_on = is_on
+            self._refresh()
+
+    def _refresh(self):
+        self.text             = self._name
+        self.background_color = _FAV_ON if self._is_on else _FAV_OFF
+        self.color            = _FAV_ON_TEXT if self._is_on else _TEXT
+
+    def _handle_toggle(self, *_a):
+        if self._pending:
+            return
+        self._pending = True
+        new_state     = not self._is_on
+        self._is_on   = new_state
+        self._refresh()
+        threading.Thread(target=self._send_toggle, args=(new_state,), daemon=True).start()
+
+    def _send_toggle(self, new_state):
+        _mark_huecontrol(self.gid)
+        try:
+            self._api.set_group_on(self.gid, new_state)
+            log_event(self._name, self.gid, "on" if new_state else "off", None, "lumio")
+        except Exception as exc:
+            print(f"[kiosk-favorite] toggle error for {self._name}: {exc}")
+            Clock.schedule_once(lambda _dt: self._rollback(not new_state), 0)
+        finally:
+            self._pending = False
+
+    @mainthread
+    def _rollback(self, is_on):
+        self._is_on = is_on
+        self._refresh()
+
+
 # ── Weather kiosk ──────────────────────────────────────────────────────────────
 
 class WeatherKiosk(FloatLayout):
     """Full-screen ambient weather view, swapped in over the room grid."""
 
     _STATS = (
-        ('humidity',   'Humidity'),
         ('uv',         'UV Index'),
-        ('wind',       'Wind'),
         ('gusts',      'Gusts'),
         ('pressure',   'Pressure'),
         ('visibility', 'Visibility'),
@@ -428,6 +498,7 @@ class WeatherKiosk(FloatLayout):
         self._on_back = on_back
         self._lat = self._lon = None
         self._data = None
+        self._last_update = None
         self._tick_ev = None
 
         # Ambient layers, back to front
@@ -452,58 +523,106 @@ class WeatherKiosk(FloatLayout):
     # -- construction helpers --------------------------------------------------
 
     def _build_header(self, content):
-        hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=36, spacing=10)
+        hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=52, spacing=10)
         back_btn = Button(
-            text="←", font_name=SYMBOL_FONT or 'Roboto', font_size="20sp",
-            size_hint=(None, 1), width=44,
+            text="←", font_name=SYMBOL_FONT or 'Roboto', font_size="28sp",
+            size_hint=(None, 1), width=64,
             background_normal="", background_down="",
             background_color=(0, 0, 0, 0), color=_TEXT,
         )
         back_btn.bind(on_release=lambda _w: self._on_back and self._on_back())
 
-        self._city_lbl = Label(text="", font_size="17sp", bold=True, color=_TEXT,
-                               halign="left", valign="middle")
+        # Stacked in a column shaped like clock_col (28 + 18) so its text sits
+        # on the same baseline as the clock above "Updated" instead of centering
+        # in the full header height while the clock bottom-anchors in its row
+        # ("align the city and time text, horizontally, that looks horrible").
+        city_col = BoxLayout(orientation='vertical')
+        self._city_lbl = Label(text="", font_size="22sp", bold=True, color=_TEXT,
+                               size_hint_y=None, height=28,
+                               halign="left", valign="bottom")
         self._city_lbl.bind(size=lambda w, _v: setattr(w, 'text_size', (w.width, None)))
+        city_col.add_widget(self._city_lbl)
+        city_col.add_widget(Widget(size_hint_y=None, height=18))
 
-        self._clock_lbl = Label(text="", font_size="15sp", color=_TEXT,
-                                size_hint=(None, 1), width=92,
-                                halign="right", valign="middle")
-        self._clock_lbl.bind(size=lambda w, _v: setattr(w, 'text_size', (w.width, None)))
+        # Quick on/off toggles for the user's top-configured rooms — populated
+        # by set_favorites(); empty (width 0) until then so it takes no space.
+        self._fav_box = BoxLayout(orientation='horizontal', size_hint=(None, 1),
+                                  width=0, spacing=8)
+        self._fav_buttons = {}
+
+        # Current time (large) + "Updated H:MM AM/PM" (small) stacked beneath it
+        clock_col = BoxLayout(orientation='vertical', size_hint=(None, 1), width=130)
+        self._clock_lbl = Label(text="", font_size="20sp", bold=True, color=_TEXT,
+                                size_hint_y=None, height=28,
+                                halign="right", valign="bottom")
+        self._updated_lbl = Label(text="", font_size="11sp", color=_SUB_SKY,
+                                  size_hint_y=None, height=18,
+                                  halign="right", valign="top")
+        for lbl in (self._clock_lbl, self._updated_lbl):
+            lbl.bind(size=lambda w, _v: setattr(w, 'text_size', (w.width, None)))
+            clock_col.add_widget(lbl)
 
         hdr.add_widget(back_btn)
-        hdr.add_widget(self._city_lbl)
-        hdr.add_widget(self._clock_lbl)
+        hdr.add_widget(city_col)
+        hdr.add_widget(self._fav_box)
+        hdr.add_widget(clock_col)
         content.add_widget(hdr)
 
     def _build_current_card(self, content):
-        card = _GlassCard(orientation='horizontal', size_hint_y=None, height=110, spacing=16)
-        self._icon_img = Image(size_hint=(None, 1), width=84, allow_stretch=True, keep_ratio=True)
+        card = _GlassCard(orientation='horizontal', size_hint_y=None, height=110, spacing=20)
+        # Box wider than the icon's rendered size (height-constrained, ~90px) —
+        # Image centers its texture within the bbox, so the extra width reads as
+        # the icon sitting centered between the card's left edge and the temp,
+        # rather than flush against the edge ("visual... centered between temp
+        # and left alignment... and bigger would fill the space better").
+        self._icon_img = Image(size_hint=(None, 1), width=110, allow_stretch=True, keep_ratio=True)
         card.add_widget(self._icon_img)
 
+        # Centered (not left-anchored) — this column spans the open space between
+        # the icon and the mini-stats, so left-aligned text hugged the icon and
+        # left a lopsided gap on the right.
         text_col = BoxLayout(orientation='vertical', spacing=2)
         self._temp_lbl = Label(text="", font_size="40sp", bold=True, color=_TEMP,
-                               size_hint_y=None, height=48, halign="left", valign="middle")
+                               size_hint_y=None, height=48, halign="center", valign="middle")
         self._cond_lbl = Label(text="", font_size="16sp", color=_TEXT,
-                               size_hint_y=None, height=24, halign="left", valign="middle")
+                               size_hint_y=None, height=24, halign="center", valign="middle")
         self._feels_lbl = Label(text="", font_size="13sp", color=_SUB,
-                                size_hint_y=None, height=20, halign="left", valign="middle")
+                                size_hint_y=None, height=20, halign="center", valign="middle")
         for lbl in (self._temp_lbl, self._cond_lbl, self._feels_lbl):
             lbl.bind(size=lambda w, _v: setattr(w, 'text_size', (w.width, None)))
             text_col.add_widget(lbl)
         card.add_widget(text_col)
+
+        # Secondary readouts spread across the card's right half — smaller than
+        # the headline temp, so the card uses the full kiosk width instead of
+        # clustering everything against the icon on the left.
+        self._mini_humidity = self._add_mini_stat(card, "Humidity")
+        self._mini_wind     = self._add_mini_stat(card, "Wind")
         content.add_widget(card)
+
+    def _add_mini_stat(self, card, caption):
+        col = BoxLayout(orientation='vertical', size_hint_x=None, width=110, spacing=2)
+        col.add_widget(Label(text=caption, font_size="12sp", color=_SUB,
+                             size_hint_y=None, height=18, halign='center', valign='middle'))
+        value = Label(text="—", font_size="22sp", bold=True, color=_TEXT,
+                      size_hint_y=None, height=30, halign='center', valign='middle')
+        col.add_widget(value)
+        card.add_widget(col)
+        return value
 
     def _build_stats_card(self, content):
         card = _GlassCard(size_hint_y=None, height=96, padding=[14, 8, 14, 8])
-        grid = GridLayout(cols=4, spacing=4)
+        grid = GridLayout(cols=3, spacing=4)
         card.add_widget(grid)
         self._stat_labels = {}
         for key, caption in self._STATS:
             col = BoxLayout(orientation='vertical')
             col.add_widget(Label(text=caption, font_size="10sp", color=_SUB,
                                  size_hint_y=None, height=14))
+            # 'sun' renders a → arrow glyph — needs SYMBOL_FONT or it shows as tofu
+            font_name = (SYMBOL_FONT or 'Roboto') if key == 'sun' else 'Roboto'
             value = Label(text="—", font_size="15sp", bold=True, color=_TEXT,
-                          size_hint_y=None, height=22)
+                          font_name=font_name, size_hint_y=None, height=22)
             col.add_widget(value)
             grid.add_widget(col)
             self._stat_labels[key] = value
@@ -515,6 +634,7 @@ class WeatherKiosk(FloatLayout):
         if not data:
             return
         self._data = data
+        self._last_update = datetime.now()
         self._lat, self._lon = lat, lon
 
         self._city_lbl.text  = city or "Weather"
@@ -522,12 +642,12 @@ class WeatherKiosk(FloatLayout):
         self._temp_lbl.text  = f"{data['temp']}°F"
         self._cond_lbl.text  = data.get('condition', '')
         self._feels_lbl.text = f"Feels like {data.get('feels_like', data['temp'])}°"
+        self._mini_humidity.text = f"{data.get('humidity', '—')}%"
+        self._mini_wind.text     = f"{data.get('wind_mph', '—')} mph"
 
         uv = data.get('uv_index', 0)
         s = self._stat_labels
-        s['humidity'].text   = f"{data.get('humidity', '—')}%"
         s['uv'].text         = f"{uv:g}  {_uv_category(uv)}"
-        s['wind'].text       = f"{data.get('wind_mph', '—')} mph"
         s['gusts'].text      = f"{data.get('wind_gusts', '—')} mph"
         s['pressure'].text   = f"{data.get('pressure_in', '—')} in"
         s['visibility'].text = f"{data.get('visibility_mi', '—')} mi"
@@ -538,6 +658,27 @@ class WeatherKiosk(FloatLayout):
         self._clouds.set_cloud_pct(data.get('cloud_pct', 0))
         self._precip.set_condition(data.get('wcode', -1))
         self._start_ticking()
+
+    def set_favorites(self, rooms, api):
+        """rooms: [(group_id, name, is_on), ...] — the kiosk's quick on/off
+        toggles. Rebuilds only when the set of rooms changes; otherwise just
+        syncs button state so an in-flight tap isn't clobbered mid-toggle."""
+        if not rooms or api is None:
+            self._fav_box.clear_widgets()
+            self._fav_buttons = {}
+            self._fav_box.width = 0
+            return
+        if set(self._fav_buttons) != {gid for gid, _name, _on in rooms}:
+            self._fav_box.clear_widgets()
+            self._fav_buttons = {}
+            self._fav_box.width = len(rooms) * 92 + (len(rooms) - 1) * self._fav_box.spacing
+            for gid, name, is_on in rooms:
+                btn = _FavToggle(gid, name, is_on, api)
+                self._fav_box.add_widget(btn)
+                self._fav_buttons[gid] = btn
+        else:
+            for gid, _name, is_on in rooms:
+                self._fav_buttons[gid].set_state(is_on)
 
     # -- forecast strip ----------------------------------------------------------
 
@@ -593,6 +734,8 @@ class WeatherKiosk(FloatLayout):
 
     def _on_tick(self, _dt):
         self._clock_lbl.text = datetime.now().strftime("%I:%M %p").lstrip("0")
+        if self._last_update:
+            self._updated_lbl.text = "Updated " + self._last_update.strftime("%I:%M %p").lstrip("0")
         if self._data:
             self._update_ambient()
 

@@ -38,11 +38,16 @@ weather dict and what they drive:
 ## Architecture
 New module `ui_weather_kiosk.py` (mirrors the `ui_cards.py`/`ui_panels.py` split):
 
-- `WeatherKiosk(FloatLayout)` — public surface: `update(data, city, lat, lon)`.
-  Layers (back to front): `_SkyBackground` → `_CloudLayer` → `_SunMoonArc` →
-  `_PrecipLayer` → foreground content column (`_GlassCard` panels: current
-  conditions, stat grid, 5-day forecast strip reusing `_DayCol`/`get_icon_path`).
-  Tapping a forecast day opens the existing `DayDetailModal` unchanged.
+- `WeatherKiosk(FloatLayout)` — public surface: `update(data, city, lat, lon)`
+  and `set_favorites(rooms, api)`. Layers (back to front): `_SkyBackground` →
+  `_CloudLayer` → `_SunMoonArc` → `_PrecipLayer` → foreground content column
+  (`_GlassCard` panels: current conditions, stat grid, 5-day forecast strip
+  reusing `_DayCol`/`get_icon_path`). Tapping a forecast day opens the existing
+  `DayDetailModal` unchanged.
+- `_FavToggle(Button)` — compact on/off chip for a "favorite" room, shown in
+  the header next to the city name. Mirrors `RoomCard`'s toggle flow exactly
+  (optimistic UI, threaded `set_group_on`, `log_event`/`_mark_huecontrol`,
+  rollback on error) so a kiosk tap behaves identically to a grid-card tap.
 - Always rendered in the same dark-navy palette as `WeatherModal`, regardless of
   app theme — consistent ambient look day or night.
 - A single `Clock.schedule_interval(..., 60)` ticks the live clock and recomputes
@@ -59,11 +64,13 @@ New module `ui_weather_kiosk.py` (mirrors the `ui_cards.py`/`ui_panels.py` split
   restoring them on the kiosk's back-arrow tap. SSE/weather/Supabase threads stay
   anchored in `RoomGrid` throughout — nothing is torn down.
 
-## Future idea (deferred — not built yet)
-**Light favorites on the kiosk**: 1-2 small on/off-only quick-toggle buttons
-(no brightness slider) for frequently-used rooms, placed wherever the final
-ambient layout leaves room. Revisit once the kiosk is in daily use and we can see
-what real estate remains.
+## Light favorites — shipped
+What started as a deferred "future idea" (1-2 on/off-only quick-toggle buttons
+for frequently-used rooms, no slider) shipped directly into the header: the
+kiosk always shows toggles for the **first two entries in the user's
+`room_order`** (`hue_settings.json` — "top two per the local config"), each a
+compact `_FavToggle` chip colored amber when on / navy when off. See the build
+log below for the final design.
 
 ## Build notes / progress log
 - ✅ Data layer switched to `current=` params (lumio_weather.py) — verified
@@ -108,3 +115,57 @@ what real estate remains.
   real 800×480 canvas for a few seconds. `WeatherModal`'s `⛶` handler is now a
   named `_on_expand_tap` method instead of a tuple-comma lambda, matching the
   rest of the file's `on_release` style.
+- 🔧 UI feedback pass after first real-world look at the screenshot:
+  - Fixed the broken `→` between the sunrise/sunset times — the `sun` stat's
+    value `Label` was missing `font_name=SYMBOL_FONT`, so the arrow rendered
+    as a tofu glyph (looked like a stray "x" between the two times).
+  - `_GlassCard`/`_CARD` fills bumped from ~50% to ~88% alpha — at the lower
+    alpha the `_SunMoonArc` glow bled through from behind and washed out
+    whatever stat tile it happened to be sitting behind as a smudge. Still
+    reads as "glass" via the lighter border `Line`; just no longer lets the
+    ambient layer behind it bleed through into card text.
+  - Current-conditions card reworked to use the full kiosk width: humidity
+    and wind moved out of the stat grid into compact mini-stat columns
+    (`_add_mini_stat`) next to the temp/condition block — smaller than the
+    headline temp, spread across the card instead of clustering against the
+    icon. Stat grid dropped from 8 tiles/4 cols to 6 tiles/3 cols (no more
+    duplication) now that humidity/wind live in the current-conditions card.
+  - Back arrow (`←`) and the popup's `⛶`/`×` buttons enlarged for touch —
+    back arrow grew from 44×36 to 64×52 (20sp→28sp); popup buttons from
+    40×36 to 56×52 (`⛶` 18sp→22sp, `×` 22sp→26sp, `×` enlarged to match `⛶`
+    per "x... can't be tiny if expand area is larger").
+- ✅ Light favorites shipped: `_FavToggle` chips in the kiosk header showing
+  the first two `room_order` entries as on/off toggles (amber = on, navy =
+  off). `RoomGrid._kiosk_favorites()` (lumio.py) reads `room_order` +
+  `_last_groups` for `(gid, name, any_on)`; `WeatherKiosk.set_favorites()`
+  rebuilds the chips only when the room set changes, otherwise just syncs
+  their on/off color so an in-flight tap isn't clobbered. Refreshed on the
+  same cadence as weather data (`_push_weather_to_kiosk`).
+- 🔧 Second UI feedback pass (fonts, alignment, last-update):
+  - City label 17sp→22sp, `_FavToggle` chips 12sp→14sp (width 88→92 to match),
+    clock label 16sp→20sp — all already bold, just larger ("font larger and a
+    little more bold").
+  - Header clock became a two-line `clock_col`: `_clock_lbl` (20sp, bold) with
+    a small `_updated_lbl` ("Updated H:MM AM/PM", 11sp, muted) stacked beneath
+    it. `WeatherKiosk._last_update` is stamped in `update()` and rendered each
+    minute alongside the live clock in `_on_tick`.
+  - City label restructured into `city_col`, a column shaped like `clock_col`
+    (28px label + 18px spacer, both bottom-anchored) so its baseline lines up
+    with the clock's baseline instead of centering across the full header
+    height while the clock bottom-anchors within its own sub-row ("align the
+    city and time text horizontally, that looks horrible").
+  - Current-conditions temp/condition/feels-like switched from `halign="left"`
+    to `"center"` — the text column sits in open space between the icon and
+    mini-stats, so left-aligned text hugged the icon ("temp is still way
+    left").
+  - Weather icon's box widened 84→110px. The image is height-constrained
+    (~90px) and Kivy centers a texture within its widget's bbox, so the wider
+    box both renders the icon a bit larger (no longer width-clipped at 84) and
+    visibly centers it between the card's left edge and the temp block
+    ("visual... centered between temp and left alignment... bigger would fill
+    the space better").
+  - New `_SUB_SKY` color (translucent white) for `_updated_lbl` — caught while
+    screenshotting: `_SUB`'s blue-gray reads fine on the dark glass cards but
+    nearly vanishes directly over the bright daytime sky (similar hue/
+    luminosity). Header text drawn straight over the ambient layers needs a
+    sky-safe muted tone, not the card-safe one.

@@ -501,7 +501,7 @@ class WeatherModal(ModalView):
         )
 
         # Header: city + expand-to-kiosk + close
-        hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=36)
+        hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=52)
         city_lbl = Label(
             text=city or "Weather",
             font_size="16sp", bold=True,
@@ -512,8 +512,8 @@ class WeatherModal(ModalView):
         hdr.add_widget(city_lbl)
         if self._on_expand:
             expand_btn = Button(
-                text="⛶", font_name=SYMBOL_FONT or 'Roboto', font_size="18sp",
-                size_hint=(None, 1), width=40,
+                text="⛶", font_name=SYMBOL_FONT or 'Roboto', font_size="22sp",
+                size_hint=(None, 1), width=56,
                 background_normal="", background_down="",
                 background_color=(0, 0, 0, 0),
                 color=self._SUB,
@@ -521,8 +521,8 @@ class WeatherModal(ModalView):
             expand_btn.bind(on_release=self._on_expand_tap)
             hdr.add_widget(expand_btn)
         close_btn = Button(
-            text="×", font_size="22sp",
-            size_hint=(None, 1), width=40,
+            text="×", font_size="26sp",
+            size_hint=(None, 1), width=56,
             background_normal="", background_down="",
             background_color=(0, 0, 0, 0),
             color=self._SUB,
