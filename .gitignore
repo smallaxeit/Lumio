@@ -1,5 +1,3 @@
-CLAUDE.md
-
 # Credentials and runtime data — never commit these
 hue_settings.json
 hue_log.jsonl
