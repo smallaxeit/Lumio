@@ -164,8 +164,25 @@ log below for the final design.
     visibly centers it between the card's left edge and the temp block
     ("visual... centered between temp and left alignment... bigger would fill
     the space better").
-  - New `_SUB_SKY` color (translucent white) for `_updated_lbl` — caught while
-    screenshotting: `_SUB`'s blue-gray reads fine on the dark glass cards but
-    nearly vanishes directly over the bright daytime sky (similar hue/
-    luminosity). Header text drawn straight over the ambient layers needs a
-    sky-safe muted tone, not the card-safe one.
+  - `_updated_lbl` color: caught mid-pass that `_SUB`'s blue-gray (tuned for
+    the dark glass cards) nearly vanishes directly over the bright daytime
+    sky. Tried a translucent-white `_SUB_SKY` first; superseded one round
+    later by solid `_TEXT` per explicit ask ("last updated time and label
+    needs to be white font") — see below. `_SUB_SKY` removed as dead code.
+- 🔧 Third pass — mockup-driven sizing (user supplied an edited screenshot:
+  "just a mockup, needs aligned and cleaned up... in general some larger
+  elements"):
+  - `_updated_lbl` → solid `_TEXT` (white), not muted — explicit ask.
+  - Current-conditions temp/condition/feels-like bumped 40/16/13sp →
+    46/18/14sp ("in general some larger elements").
+  - Forecast-tile text enlarged and the precip line made bold to match the
+    day-header's weight: day header 11→13sp, condition/precip line 10→12sp
+    (now bold), high temp 15→17sp, low temp 12→13sp ("make the text a little
+    larger and bold like the day header and 'rain 34%' etc").
+  - That bump pushed `_DayCol.minimum_height` from 128 to 134px against an
+    unchanged 118px strip — `_GlassCard`'s rounded-rect background is bound to
+    `col.size`, so the overflowing day-header label rendered above the card,
+    directly over the lighter sky (looked clipped/faded, like `_SUB` text on
+    sky — same family of bug). Grew `_forecast` 118→136px, borrowing from the
+    ~46px of slack already sitting above the header (BoxLayout's unfilled
+    space lands at the top when no child has `size_hint_y=1`).

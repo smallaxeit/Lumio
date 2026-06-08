@@ -32,10 +32,6 @@ from ui_panels import DayDetailModal
 
 _TEXT   = (0.92, 0.94, 1.00, 1)
 _SUB    = (0.52, 0.60, 0.82, 1)
-# _SUB reads fine on the dark glass cards but nearly disappears directly over
-# the bright daytime sky (similar blue-gray hue/luminosity) — translucent white
-# stays legible at any time of day for header text like "Updated H:MM AM/PM".
-_SUB_SKY = (0.92, 0.94, 1.00, 0.55)
 _TEMP   = (0.95, 0.75, 0.25, 1)
 # Card fills are nearly opaque on purpose — at lower alpha the sun/moon glow
 # bleeds through from behind and washes out the text as a smudge mid-card.
@@ -515,7 +511,10 @@ class WeatherKiosk(FloatLayout):
         self._build_current_card(content)
         self._build_stats_card(content)
 
-        self._forecast = GridLayout(cols=5, size_hint_y=None, height=118, spacing=6)
+        # 136 (not 118) — _DayCol's larger text now needs minimum_height=134;
+        # there's ~46px of unused slack above the header to draw from, and the
+        # taller strip reads as "larger elements" too.
+        self._forecast = GridLayout(cols=5, size_hint_y=None, height=136, spacing=6)
         content.add_widget(self._forecast)
 
         self.add_widget(content)
@@ -555,7 +554,7 @@ class WeatherKiosk(FloatLayout):
         self._clock_lbl = Label(text="", font_size="20sp", bold=True, color=_TEXT,
                                 size_hint_y=None, height=28,
                                 halign="right", valign="bottom")
-        self._updated_lbl = Label(text="", font_size="11sp", color=_SUB_SKY,
+        self._updated_lbl = Label(text="", font_size="11sp", color=_TEXT,
                                   size_hint_y=None, height=18,
                                   halign="right", valign="top")
         for lbl in (self._clock_lbl, self._updated_lbl):
@@ -582,11 +581,11 @@ class WeatherKiosk(FloatLayout):
         # the icon and the mini-stats, so left-aligned text hugged the icon and
         # left a lopsided gap on the right.
         text_col = BoxLayout(orientation='vertical', spacing=2)
-        self._temp_lbl = Label(text="", font_size="40sp", bold=True, color=_TEMP,
-                               size_hint_y=None, height=48, halign="center", valign="middle")
-        self._cond_lbl = Label(text="", font_size="16sp", color=_TEXT,
-                               size_hint_y=None, height=24, halign="center", valign="middle")
-        self._feels_lbl = Label(text="", font_size="13sp", color=_SUB,
+        self._temp_lbl = Label(text="", font_size="46sp", bold=True, color=_TEMP,
+                               size_hint_y=None, height=54, halign="center", valign="middle")
+        self._cond_lbl = Label(text="", font_size="18sp", color=_TEXT,
+                               size_hint_y=None, height=26, halign="center", valign="middle")
+        self._feels_lbl = Label(text="", font_size="14sp", color=_SUB,
                                 size_hint_y=None, height=20, halign="center", valign="middle")
         for lbl in (self._temp_lbl, self._cond_lbl, self._feels_lbl):
             lbl.bind(size=lambda w, _v: setattr(w, 'text_size', (w.width, None)))
@@ -697,8 +696,8 @@ class WeatherKiosk(FloatLayout):
                 col.bind(on_release=lambda _inst, d=day, today=(idx == 0): self._open_day_detail(d, today))
 
             label = "Today" if idx == 0 else day['day']
-            col.add_widget(Label(text=label, font_size="11sp", bold=True, color=_SUB,
-                                 size_hint_y=None, height=18))
+            col.add_widget(Label(text=label, font_size="13sp", bold=True, color=_SUB,
+                                 size_hint_y=None, height=20))
             icon_path = get_icon_path(day.get('wcode', -1))
             if icon_path:
                 col.add_widget(Image(source=icon_path, size_hint_y=None, height=34,
@@ -708,11 +707,13 @@ class WeatherKiosk(FloatLayout):
             cond_text = day['cond_short']
             if day.get('precip_pct', 0) > 0:
                 cond_text += f"  {day['precip_pct']}%"
-            col.add_widget(Label(text=cond_text, font_size="10sp", color=_TEXT,
-                                 size_hint_y=None, height=16))
-            col.add_widget(Label(text=f"{day['high']}°", font_size="15sp", bold=True,
-                                 color=_TEMP, size_hint_y=None, height=22))
-            col.add_widget(Label(text=f"{day['low']}°", font_size="12sp", color=_SUB,
+            # Bumped to match the day-header's size/weight ("make the text a
+            # little larger and bold like the day header and 'rain 34%' etc.")
+            col.add_widget(Label(text=cond_text, font_size="12sp", bold=True, color=_TEXT,
+                                 size_hint_y=None, height=18))
+            col.add_widget(Label(text=f"{day['high']}°", font_size="17sp", bold=True,
+                                 color=_TEMP, size_hint_y=None, height=24))
+            col.add_widget(Label(text=f"{day['low']}°", font_size="13sp", color=_SUB,
                                  size_hint_y=None, height=18))
             self._forecast.add_widget(col)
 
