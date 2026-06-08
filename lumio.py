@@ -197,24 +197,9 @@ class RoomGrid(BoxLayout):
     def _push_weather_to_kiosk(self):
         self._kiosk.update(
             data=self._last_weather_data,
-            city=self._settings.get("city", ""),
             lat=self._settings.get("latitude"),
             lon=self._settings.get("longitude"),
         )
-        self._kiosk.set_favorites(self._kiosk_favorites(), self.api)
-
-    def _kiosk_favorites(self):
-        """Top entries from the configured room order — the kiosk's quick
-        on/off toggles ('always take the top two per the local config')."""
-        favorites = []
-        for gid in self._settings.get("room_order", []):
-            group = self._last_groups.get(gid)
-            if group:
-                favorites.append((gid, group.get("name", "?"),
-                                  group.get("state", {}).get("any_on", False)))
-            if len(favorites) == 2:
-                break
-        return favorites
 
     def _show_weather_kiosk(self):
         if not self._last_weather_data:

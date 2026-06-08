@@ -62,7 +62,7 @@ python lumio.py
 **Weather Kiosk**
 - Full-screen alternative to the room grid — one tap from the weather card's ⛶ button, one tap (←) back
 - Procedurally generated visuals that react to live data: sky gradient that shifts with real sunrise/sunset and cloud cover, a glowing sun/moon that travels an arc tracking actual elapsed daylight, and softly drifting translucent clouds scaled to current cloud cover
-- Glass-card panels for current conditions (temp, icon, condition, "feels like"), a stat grid (humidity, UV index + category, wind, gusts, pressure, visibility, cloud cover, sunrise/sunset), and the same 5-day forecast strip — tap a day for the hourly breakdown
+- A single hero glass card doubles as the kiosk's only chrome — back arrow, live clock, and "Updated" stamp folded in above a big icon + temp + condition + "feels like" + Humidity/Wind mini-stats — plus a 4-tile stat row (UV Index, Gusts, Pressure, Sunrise · Sunset) and the same 5-day forecast strip — tap a day for the hourly breakdown
 - Live clock; everything refreshes on the existing weather poll cadence (`weather_poll_seconds`, default 120s) — no extra network requests
 
 **Settings (☰ button)**

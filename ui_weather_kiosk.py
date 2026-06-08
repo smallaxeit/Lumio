@@ -9,11 +9,10 @@ so the look stays consistent regardless of the app theme.
 
 import math
 import random
-import threading
 from datetime import datetime, timedelta
 
 from kivy.animation import Animation
-from kivy.clock import Clock, mainthread
+from kivy.clock import Clock
 from kivy.graphics import Color, Ellipse, Line, Rectangle, RoundedRectangle
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -25,7 +24,6 @@ from kivy.uix.widget import Widget
 
 from theme import SYMBOL_FONT, _DayCol
 from lumio_weather import get_icon_path
-from lumio_log import log_event, _mark_huecontrol
 from ui_panels import DayDetailModal
 
 # ── Palette (always dark navy, matches WeatherModal) ───────────────────────────
@@ -175,7 +173,14 @@ class _SunMoonArc(Widget):
 
     _MARGIN     = 70
     _ARC_HEIGHT = 130
-    _HORIZON    = 60
+    # 60 → 100 ("shift up") — at low sun-elevation (near sunrise/sunset) the
+    # glow's lowest point sat right behind the forecast strip's corner,
+    # poking out from under the glass card instead of glowing softly through
+    # the gap above it. Raising the floor moves that low point into the gap
+    # between the forecast and stats cards. The glow rings/path keep their
+    # own alpha and width untouched ("lines... sharp") — only its travel
+    # range changes, not how crisply it's drawn.
+    _HORIZON    = 100
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -250,11 +255,14 @@ class _Cloud(Widget):
 class _CloudLayer(Widget):
     """2-3 clouds drifting slowly side to side; opacity follows cloud cover."""
 
+    # Scales bumped ~35% across the board ("bigger clouds or some or
+    # whatever it is too" — the drifting puffs were reading as faint smudges
+    # against the sky gradient, easy to miss on a small screen).
     # (rel_x, rel_y, scale, sway_px, half-cycle seconds)
     _LAYOUT = (
-        (0.10, 0.74, 1.00, 70, 70),
-        (0.56, 0.60, 0.72, 55, 95),
-        (0.32, 0.86, 0.55, 45, 120),
+        (0.10, 0.74, 1.35, 70, 70),
+        (0.56, 0.60, 0.95, 55, 95),
+        (0.32, 0.86, 0.78, 45, 120),
     )
 
     def __init__(self, **kwargs):
@@ -412,80 +420,18 @@ class _GlassCard(BoxLayout):
         self._border.rounded_rectangle = (self.x, self.y, self.width, self.height, 16)
 
 
-# ── Favorite-room quick toggles ────────────────────────────────────────────────
-
-_FAV_ON       = (0.95, 0.75, 0.25, 1)   # amber — matches _TEMP, reads as "on"
-_FAV_OFF      = (0.20, 0.27, 0.42, 1)   # muted navy — reads as "off"
-_FAV_ON_TEXT  = (0.12, 0.12, 0.16, 1)
-
-
-class _FavToggle(Button):
-    """Compact on/off toggle for one favorite room. Mirrors RoomCard's toggle
-    flow — optimistic UI, threaded API call, event log, rollback on error —
-    so a kiosk tap behaves identically to a grid-card tap."""
-
-    def __init__(self, gid, name, is_on, api, **kwargs):
-        super().__init__(
-            font_size="14sp", bold=True,
-            size_hint=(None, 1), width=92,
-            background_normal="", background_down="",
-            **kwargs,
-        )
-        self.gid      = gid
-        self._name    = name
-        self._api     = api
-        self._is_on   = is_on
-        self._pending = False
-        self._refresh()
-        self.bind(on_release=self._handle_toggle)
-
-    def set_state(self, is_on):
-        if not self._pending:
-            self._is_on = is_on
-            self._refresh()
-
-    def _refresh(self):
-        self.text             = self._name
-        self.background_color = _FAV_ON if self._is_on else _FAV_OFF
-        self.color            = _FAV_ON_TEXT if self._is_on else _TEXT
-
-    def _handle_toggle(self, *_a):
-        if self._pending:
-            return
-        self._pending = True
-        new_state     = not self._is_on
-        self._is_on   = new_state
-        self._refresh()
-        threading.Thread(target=self._send_toggle, args=(new_state,), daemon=True).start()
-
-    def _send_toggle(self, new_state):
-        _mark_huecontrol(self.gid)
-        try:
-            self._api.set_group_on(self.gid, new_state)
-            log_event(self._name, self.gid, "on" if new_state else "off", None, "lumio")
-        except Exception as exc:
-            print(f"[kiosk-favorite] toggle error for {self._name}: {exc}")
-            Clock.schedule_once(lambda _dt: self._rollback(not new_state), 0)
-        finally:
-            self._pending = False
-
-    @mainthread
-    def _rollback(self, is_on):
-        self._is_on = is_on
-        self._refresh()
-
-
 # ── Weather kiosk ──────────────────────────────────────────────────────────────
 
 class WeatherKiosk(FloatLayout):
     """Full-screen ambient weather view, swapped in over the room grid."""
 
+    # Visibility/Cloud Cover dropped per the user's edited mockup ("you have
+    # elements i removed... this, only this, this is the way") — four stats
+    # now fill a single row exactly, no empty grid cells.
     _STATS = (
         ('uv',         'UV Index'),
         ('gusts',      'Gusts'),
         ('pressure',   'Pressure'),
-        ('visibility', 'Visibility'),
-        ('clouds',     'Cloud Cover'),
         ('sun',        'Sunrise · Sunset'),
     )
 
@@ -507,121 +453,211 @@ class WeatherKiosk(FloatLayout):
 
         content = BoxLayout(orientation='vertical', size_hint=(1, 1),
                             padding=[24, 14, 24, 14], spacing=10)
-        self._build_header(content)
         self._build_current_card(content)
         self._build_stats_card(content)
 
-        # 136 (not 118) — _DayCol's larger text now needs minimum_height=134;
-        # there's ~46px of unused slack above the header to draw from, and the
-        # taller strip reads as "larger elements" too.
-        self._forecast = GridLayout(cols=5, size_hint_y=None, height=136, spacing=6)
+        # 184 (not 136) absorbed the ~48px that used to sit as dead space
+        # above the hero card once the header bar was removed ("lot of dead
+        # space at the top, shift up and fill, expand bottom tiles too").
+        # Trimmed back 6px here to help fund the hero card's bigger arrow —
+        # 178 is this strip's exact content minimum (_DayCol's
+        # minimum_height; see _rebuild_forecast), so cells size to fit with
+        # zero slack but nothing left over to clip. The three card heights
+        # still sum exactly to the kiosk's available content height.
+        self._forecast = GridLayout(cols=5, size_hint_y=None, height=178, spacing=6)
         content.add_widget(self._forecast)
 
         self.add_widget(content)
 
     # -- construction helpers --------------------------------------------------
 
-    def _build_header(self, content):
-        hdr = BoxLayout(orientation='horizontal', size_hint_y=None, height=52, spacing=10)
+    def _build_current_card(self, content):
+        # Single hero card — folds in what used to be a separate header bar
+        # (back arrow top-left, clock/"Updated" top-right; no city label, the
+        # kiosk only ever shows local conditions) above the current-conditions
+        # row, per the user's mockup ("no need for header bar, it is gone").
+        card = _GlassCard(orientation='vertical', size_hint_y=None, height=178, spacing=6)
+
+        # Arrow grew again — 22sp/44px → 34sp/70px still wasn't enough
+        # ("for the 17th time... please make the back arrow bigger").
+        # Jumping straight to 50sp/95px this round instead of another timid
+        # step — the glyph now slightly overflows this row's height, which
+        # reads as more prominent rather than clipped (Label textures aren't
+        # stencil-clipped to their widget's box). Row only grew 46→48; the
+        # rest of the card's +14 went to `main_row` below it, where the temp
+        # needed the room far more ("the temp needs to fill that top
+        # space... bigger temp, come on, all the way to the top, fill it").
+        # Funded by trimming the stats card and forecast strip (both now sit
+        # exactly on their content minimums — see their comments below).
+        # Trimmed again, 48→40 — the user circled the temp on a screenshot
+        # ("like this big") at roughly double its 88sp size, and `main_row`
+        # needed every spare pixel it could get to support that.
+        top_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=40)
         back_btn = Button(
-            text="←", font_name=SYMBOL_FONT or 'Roboto', font_size="28sp",
-            size_hint=(None, 1), width=64,
+            text="←", font_name=SYMBOL_FONT or 'Roboto', font_size="50sp",
+            size_hint=(None, 1), width=95,
             background_normal="", background_down="",
             background_color=(0, 0, 0, 0), color=_TEXT,
         )
         back_btn.bind(on_release=lambda _w: self._on_back and self._on_back())
+        top_row.add_widget(back_btn)
+        top_row.add_widget(Widget())  # spacer — pushes the clock to the right edge
 
-        # Stacked in a column shaped like clock_col (28 + 18) so its text sits
-        # on the same baseline as the clock above "Updated" instead of centering
-        # in the full header height while the clock bottom-anchors in its row
-        # ("align the city and time text, horizontally, that looks horrible").
-        city_col = BoxLayout(orientation='vertical')
-        self._city_lbl = Label(text="", font_size="22sp", bold=True, color=_TEXT,
-                               size_hint_y=None, height=28,
-                               halign="left", valign="bottom")
-        self._city_lbl.bind(size=lambda w, _v: setattr(w, 'text_size', (w.width, None)))
-        city_col.add_widget(self._city_lbl)
-        city_col.add_widget(Widget(size_hint_y=None, height=18))
-
-        # Quick on/off toggles for the user's top-configured rooms — populated
-        # by set_favorites(); empty (width 0) until then so it takes no space.
-        self._fav_box = BoxLayout(orientation='horizontal', size_hint=(None, 1),
-                                  width=0, spacing=8)
-        self._fav_buttons = {}
-
-        # Current time (large) + "Updated H:MM AM/PM" (small) stacked beneath it
-        clock_col = BoxLayout(orientation='vertical', size_hint=(None, 1), width=130)
+        # Both lines bumped ("make both time and updated time larger") —
+        # next to the now much-bigger arrow they were reading as an
+        # afterthought crammed into the corner.
+        clock_col = BoxLayout(orientation='vertical', size_hint=(None, 1), width=145)
         self._clock_lbl = Label(text="", font_size="20sp", bold=True, color=_TEXT,
-                                size_hint_y=None, height=28,
+                                size_hint_y=None, height=19,
                                 halign="right", valign="bottom")
-        self._updated_lbl = Label(text="", font_size="11sp", color=_TEXT,
-                                  size_hint_y=None, height=18,
+        self._updated_lbl = Label(text="", font_size="15sp", color=_TEXT,
+                                  size_hint_y=None, height=16,
                                   halign="right", valign="top")
         for lbl in (self._clock_lbl, self._updated_lbl):
             lbl.bind(size=lambda w, _v: setattr(w, 'text_size', (w.width, None)))
             clock_col.add_widget(lbl)
+        top_row.add_widget(clock_col)
+        card.add_widget(top_row)
 
-        hdr.add_widget(back_btn)
-        hdr.add_widget(city_col)
-        hdr.add_widget(self._fav_box)
-        hdr.add_widget(clock_col)
-        content.add_widget(hdr)
+        # Spacing trimmed 20→12→11 — the row's width budget is far tighter
+        # now that the temp alone claims ~240px (up from ~145px before "like
+        # this big"); every other element in this row had to give back some
+        # room, and the two new centering spacers add a 6th gap, or "Wind"
+        # would render outside the card entirely.
+        main_row = BoxLayout(orientation='horizontal', spacing=11)
+        # Width trimmed to (just over) its rendered size — `keep_ratio`
+        # constrains it to the row's height anyway, so the old wider bbox
+        # was pure budget waste once the temp needed every spare pixel.
+        # Shaved another 8 (114→106) to fund the centering spacers below
+        # ("center ... in the hero") without re-tripping the overflow this
+        # row already fights at 115sp.
+        self._icon_img = Image(size_hint=(None, 1), width=106, allow_stretch=True, keep_ratio=True)
+        main_row.add_widget(self._icon_img)
 
-    def _build_current_card(self, content):
-        card = _GlassCard(orientation='horizontal', size_hint_y=None, height=110, spacing=20)
-        # Box wider than the icon's rendered size (height-constrained, ~90px) —
-        # Image centers its texture within the bbox, so the extra width reads as
-        # the icon sitting centered between the card's left edge and the temp,
-        # rather than flush against the edge ("visual... centered between temp
-        # and left alignment... and bigger would fill the space better").
-        self._icon_img = Image(size_hint=(None, 1), width=110, allow_stretch=True, keep_ratio=True)
-        card.add_widget(self._icon_img)
+        # Big temp beside the icon, with condition + "feels like" stacked as
+        # their own two-line block to its right — matches the mockup, where
+        # "Clear" sits level with "83°F" rather than stacked beneath it.
+        # 52→62→70→88→115sp. The user circled "68°F" on a screenshot at
+        # roughly double its 88sp size and wrote "like this big" — done
+        # arguing about it, just matching the box. `main_row` grew to 112px
+        # (taking another 8 from `top_row`, which is now nothing but an
+        # overflowing arrow and a two-line clock anyway), but 115sp's
+        # ~136px texture is still taller than that — it'll overflow into
+        # the card's padding above and below. Deliberate: a Label's texture
+        # isn't stencil-clipped to its widget box, so the overflow renders
+        # as "this number dominates the card" rather than "this number got
+        # cut off" — which is exactly what was asked for.
+        self._temp_lbl = Label(text="", font_size="115sp", bold=True, color=_TEMP,
+                               size_hint=(None, None))
+        # Both dimensions track the rendered texture exactly — no `text_size`
+        # binding (deliberately, unlike the other labels in this file): with
+        # one, the wrap-width chases the texture-driven widget width in a
+        # feedback loop — at 62sp "70°F" no longer fit a fixed seed width and
+        # got caught wrapping into two lines. Sizing the *widget* to its
+        # texture sidesteps that entirely: there's no leftover bbox left for
+        # Kivy to center the glyphs within, so the plain top-anchored wrapper
+        # below ("temp and F ... up ... in the hero") places it exactly where
+        # asked with zero wrap risk.
+        self._temp_lbl.bind(texture_size=lambda w, ts: setattr(w, 'size', tuple(ts)))
 
-        # Centered (not left-anchored) — this column spans the open space between
-        # the icon and the mini-stats, so left-aligned text hugged the icon and
-        # left a lopsided gap on the right.
-        text_col = BoxLayout(orientation='vertical', spacing=2)
-        self._temp_lbl = Label(text="", font_size="46sp", bold=True, color=_TEMP,
-                               size_hint_y=None, height=54, halign="center", valign="middle")
-        self._cond_lbl = Label(text="", font_size="18sp", color=_TEXT,
-                               size_hint_y=None, height=26, halign="center", valign="middle")
-        self._feels_lbl = Label(text="", font_size="14sp", color=_SUB,
-                                size_hint_y=None, height=20, halign="center", valign="middle")
-        for lbl in (self._temp_lbl, self._cond_lbl, self._feels_lbl):
-            lbl.bind(size=lambda w, _v: setattr(w, 'text_size', (w.width, None)))
-            text_col.add_widget(lbl)
-        card.add_widget(text_col)
+        # temp_col / cond_col both hug the TOP of the row now (trailing
+        # spacer absorbs the slack beneath each) instead of sitting centered
+        # against the full-height icon — "temp and F and [condition] words
+        # ... up ... in the hero". Flex spacers flank the {temp, condition}
+        # pair so it drifts toward the row's horizontal middle rather than
+        # hugging the icon's edge — "and center ... as a group". This row was
+        # already nearly at its width budget (that's what the last overflow
+        # fix was about), so the icon and mini-stats each gave back a few
+        # more pixels to fund real (if modest) slack for these spacers
+        # without pushing "Wind" back off the card.
+        temp_col = BoxLayout(orientation='vertical', size_hint=(None, 1))
+        self._temp_lbl.bind(width=lambda w, width: setattr(temp_col, 'width', width))
+        temp_col.add_widget(self._temp_lbl)
+        temp_col.add_widget(Widget(size_hint_y=1))
+        main_row.add_widget(Widget(size_hint_x=1))
+        main_row.add_widget(temp_col)
 
-        # Secondary readouts spread across the card's right half — smaller than
-        # the headline temp, so the card uses the full kiosk width instead of
-        # clustering everything against the icon on the left.
-        self._mini_humidity = self._add_mini_stat(card, "Humidity")
-        self._mini_wind     = self._add_mini_stat(card, "Wind")
+        # Fixed width + `shorten` — the same pattern the 'sun' stat label
+        # uses below, for the same reason ("overflow text") — rather than
+        # a texture-tracking width: at 115sp the temp alone claims ~240px of
+        # this row's ~720px budget, so cond_col can't be left to size itself
+        # freely any more. "Thunderstorm + hail" at 22sp would run past 200px
+        # and shove "Wind" off the edge of the card. 145px comfortably fits
+        # every common condition without truncating ("Partly cloudy",
+        # "Mostly clear", "Heavy showers"); the rare long ones get an
+        # ellipsis instead of an overflowed layout.
+        cond_col = BoxLayout(orientation='vertical', spacing=2, size_hint=(None, 1), width=145)
+        self._cond_lbl = Label(text="", font_size="22sp", bold=True, color=_TEXT,
+                               size_hint_y=None, height=30, halign="left", valign="middle",
+                               shorten=True, shorten_from='right')
+        self._feels_lbl = Label(text="", font_size="16sp", color=_SUB,
+                                size_hint_y=None, height=24, halign="left", valign="middle",
+                                shorten=True, shorten_from='right')
+        for lbl in (self._cond_lbl, self._feels_lbl):
+            lbl.bind(size=lambda w, _v: setattr(w, 'text_size', (w.width, w.height)))
+            cond_col.add_widget(lbl)
+        cond_col.add_widget(Widget(size_hint_y=1))
+        main_row.add_widget(cond_col)
+        main_row.add_widget(Widget(size_hint_x=1))
+
+        # Narrowed 110→80→76 — between the much wider temp and the
+        # fixed-width condition block, the row has no spare room for these
+        # without "Wind" rendering off the card's edge. They anchor flush to
+        # the row's right edge now (no trailing spacer) — "move humidity and
+        # wind left" already pulled them off the corner where they fought the
+        # clock; anchoring right keeps them put as a stable landmark while
+        # the temp/condition cluster floats in the middle.
+        self._mini_humidity = self._add_mini_stat(main_row, "Humidity", width=76)
+        self._mini_wind     = self._add_mini_stat(main_row, "Wind", width=76)
+        card.add_widget(main_row)
         content.add_widget(card)
 
-    def _add_mini_stat(self, card, caption):
-        col = BoxLayout(orientation='vertical', size_hint_x=None, width=110, spacing=2)
-        col.add_widget(Label(text=caption, font_size="12sp", color=_SUB,
-                             size_hint_y=None, height=18, halign='center', valign='middle'))
-        value = Label(text="—", font_size="22sp", bold=True, color=_TEXT,
-                      size_hint_y=None, height=30, halign='center', valign='middle')
+    def _add_mini_stat(self, card, caption, width=110):
+        # Bumped 12/22sp → 14/26sp ("increase font") and the same flex-spacer
+        # trick as cond_col centers caption+value vertically against the
+        # full-height temp/icon instead of sitting low against the card floor.
+        col = BoxLayout(orientation='vertical', size_hint_x=None, width=width, spacing=2)
+        col.add_widget(Widget(size_hint_y=1))
+        col.add_widget(Label(text=caption, font_size="14sp", color=_SUB,
+                             size_hint_y=None, height=20, halign='center', valign='middle'))
+        value = Label(text="—", font_size="26sp", bold=True, color=_TEXT,
+                      size_hint_y=None, height=34, halign='center', valign='middle')
         col.add_widget(value)
+        col.add_widget(Widget(size_hint_y=1))
         card.add_widget(col)
         return value
 
     def _build_stats_card(self, content):
-        card = _GlassCard(size_hint_y=None, height=96, padding=[14, 8, 14, 8])
-        grid = GridLayout(cols=3, spacing=4)
+        # Gives back another 8px to fund the hero card's bigger arrow row.
+        # 76 lands exactly on this card's content minimum (64px grid row +
+        # 12px top/bottom padding) — zero slack, but nothing here grows
+        # dynamically (the 'sun' label's text_size is bound to a fixed
+        # (width, height), not (width, None) — no wrap-trap risk), so a
+        # tight fit doesn't mean a clipped one.
+        card = _GlassCard(size_hint_y=None, height=76, padding=[14, 6, 14, 6])
+        grid = GridLayout(cols=4, spacing=4)
         card.add_widget(grid)
         self._stat_labels = {}
         for key, caption in self._STATS:
-            col = BoxLayout(orientation='vertical')
-            col.add_widget(Label(text=caption, font_size="10sp", color=_SUB,
-                                 size_hint_y=None, height=14))
-            # 'sun' renders a → arrow glyph — needs SYMBOL_FONT or it shows as tofu
-            font_name = (SYMBOL_FONT or 'Roboto') if key == 'sun' else 'Roboto'
-            value = Label(text="—", font_size="15sp", bold=True, color=_TEXT,
-                          font_name=font_name, size_hint_y=None, height=22)
+            # Captions were the one thing in this card still small/un-bold —
+            # "weather tile font needs to be much larger and bold" — brought
+            # them up to match the weight of the values above them.
+            col = BoxLayout(orientation='vertical', spacing=4)
+            col.add_widget(Label(text=caption, font_size="15sp", bold=True, color=_SUB,
+                                 size_hint_y=None, height=22))
+            # 'sun' renders a → arrow glyph — needs SYMBOL_FONT or it shows as tofu.
+            # Its value is also by far the longest string ("6:00 AM → 8:56 PM"),
+            # so it gets its own smaller size + a width-bound text_size —
+            # otherwise it overflows past the card's right edge at the same
+            # 26sp the other three stats use ("overflow text").
+            if key == 'sun':
+                value = Label(text="—", font_size="16sp", bold=True, color=_TEXT,
+                              font_name=SYMBOL_FONT or 'Roboto', halign='center', valign='middle',
+                              size_hint_y=None, height=38, shorten=True, shorten_from='right')
+                value.bind(size=lambda w, _v: setattr(w, 'text_size', (w.width, w.height)))
+            else:
+                value = Label(text="—", font_size="26sp", bold=True, color=_TEXT,
+                              font_name='Roboto', size_hint_y=None, height=38)
             col.add_widget(value)
             grid.add_widget(col)
             self._stat_labels[key] = value
@@ -629,14 +665,13 @@ class WeatherKiosk(FloatLayout):
 
     # -- public interface -------------------------------------------------------
 
-    def update(self, data: dict, city: str, lat=None, lon=None):
+    def update(self, data: dict, lat=None, lon=None):
         if not data:
             return
         self._data = data
         self._last_update = datetime.now()
         self._lat, self._lon = lat, lon
 
-        self._city_lbl.text  = city or "Weather"
         self._icon_img.source = get_icon_path(data.get('wcode', -1)) or ""
         self._temp_lbl.text  = f"{data['temp']}°F"
         self._cond_lbl.text  = data.get('condition', '')
@@ -646,45 +681,25 @@ class WeatherKiosk(FloatLayout):
 
         uv = data.get('uv_index', 0)
         s = self._stat_labels
-        s['uv'].text         = f"{uv:g}  {_uv_category(uv)}"
-        s['gusts'].text      = f"{data.get('wind_gusts', '—')} mph"
-        s['pressure'].text   = f"{data.get('pressure_in', '—')} in"
-        s['visibility'].text = f"{data.get('visibility_mi', '—')} mi"
-        s['clouds'].text     = f"{data.get('cloud_pct', '—')}%"
-        s['sun'].text        = f"{data.get('sunrise_label', '—')}  →  {data.get('sunset_label', '—')}"
+        s['uv'].text       = f"{uv:g}  {_uv_category(uv)}"
+        s['gusts'].text    = f"{data.get('wind_gusts', '—')} mph"
+        s['pressure'].text = f"{data.get('pressure_in', '—')} in"
+        s['sun'].text      = f"{data.get('sunrise_label', '—')}  →  {data.get('sunset_label', '—')}"
 
         self._rebuild_forecast(data.get('daily', [])[:5])
         self._clouds.set_cloud_pct(data.get('cloud_pct', 0))
         self._precip.set_condition(data.get('wcode', -1))
         self._start_ticking()
 
-    def set_favorites(self, rooms, api):
-        """rooms: [(group_id, name, is_on), ...] — the kiosk's quick on/off
-        toggles. Rebuilds only when the set of rooms changes; otherwise just
-        syncs button state so an in-flight tap isn't clobbered mid-toggle."""
-        if not rooms or api is None:
-            self._fav_box.clear_widgets()
-            self._fav_buttons = {}
-            self._fav_box.width = 0
-            return
-        if set(self._fav_buttons) != {gid for gid, _name, _on in rooms}:
-            self._fav_box.clear_widgets()
-            self._fav_buttons = {}
-            self._fav_box.width = len(rooms) * 92 + (len(rooms) - 1) * self._fav_box.spacing
-            for gid, name, is_on in rooms:
-                btn = _FavToggle(gid, name, is_on, api)
-                self._fav_box.add_widget(btn)
-                self._fav_buttons[gid] = btn
-        else:
-            for gid, _name, is_on in rooms:
-                self._fav_buttons[gid].set_state(is_on)
-
     # -- forecast strip ----------------------------------------------------------
 
     def _rebuild_forecast(self, days):
         self._forecast.clear_widgets()
         for idx, day in enumerate(days):
-            col = _DayCol(orientation='vertical', spacing=2, padding=[0, 6, 0, 6])
+            # Padding/spacing trimmed (16/4 → 8/3) to bankroll the across-the-
+            # board font bump below ("all the fonts... its all tiny, biggie
+            # size!") without pushing minimum_height past the 184px cell.
+            col = _DayCol(orientation='vertical', spacing=3, padding=[0, 8, 0, 8])
             with col.canvas.before:
                 Color(*_CARD)
                 rect = RoundedRectangle(radius=[10], pos=col.pos, size=col.size)
@@ -695,26 +710,27 @@ class WeatherKiosk(FloatLayout):
             if self._lat and self._lon:
                 col.bind(on_release=lambda _inst, d=day, today=(idx == 0): self._open_day_detail(d, today))
 
+            # Another full size pass — every label in the tile bumped
+            # ("forecast tiles, day headers... need to be much larger" /
+            # "all the fonts, the 'rain 80%' etc, its all tiny, biggie size!").
             label = "Today" if idx == 0 else day['day']
-            col.add_widget(Label(text=label, font_size="13sp", bold=True, color=_SUB,
-                                 size_hint_y=None, height=20))
+            col.add_widget(Label(text=label, font_size="20sp", bold=True, color=_SUB,
+                                 size_hint_y=None, height=26))
             icon_path = get_icon_path(day.get('wcode', -1))
             if icon_path:
-                col.add_widget(Image(source=icon_path, size_hint_y=None, height=34,
+                col.add_widget(Image(source=icon_path, size_hint_y=None, height=44,
                                      allow_stretch=True, keep_ratio=True))
             else:
-                col.add_widget(BoxLayout(size_hint_y=None, height=34))
+                col.add_widget(BoxLayout(size_hint_y=None, height=44))
             cond_text = day['cond_short']
             if day.get('precip_pct', 0) > 0:
                 cond_text += f"  {day['precip_pct']}%"
-            # Bumped to match the day-header's size/weight ("make the text a
-            # little larger and bold like the day header and 'rain 34%' etc.")
-            col.add_widget(Label(text=cond_text, font_size="12sp", bold=True, color=_TEXT,
-                                 size_hint_y=None, height=18))
-            col.add_widget(Label(text=f"{day['high']}°", font_size="17sp", bold=True,
-                                 color=_TEMP, size_hint_y=None, height=24))
-            col.add_widget(Label(text=f"{day['low']}°", font_size="13sp", color=_SUB,
-                                 size_hint_y=None, height=18))
+            col.add_widget(Label(text=cond_text, font_size="18sp", bold=True, color=_TEXT,
+                                 size_hint_y=None, height=24))
+            col.add_widget(Label(text=f"{day['high']}°", font_size="24sp", bold=True,
+                                 color=_TEMP, size_hint_y=None, height=32))
+            col.add_widget(Label(text=f"{day['low']}°", font_size="18sp", bold=True, color=_SUB,
+                                 size_hint_y=None, height=24))
             self._forecast.add_widget(col)
 
     def _open_day_detail(self, day, is_today=False):

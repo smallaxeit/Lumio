@@ -38,16 +38,23 @@ weather dict and what they drive:
 ## Architecture
 New module `ui_weather_kiosk.py` (mirrors the `ui_cards.py`/`ui_panels.py` split):
 
-- `WeatherKiosk(FloatLayout)` — public surface: `update(data, city, lat, lon)`
-  and `set_favorites(rooms, api)`. Layers (back to front): `_SkyBackground` →
-  `_CloudLayer` → `_SunMoonArc` → `_PrecipLayer` → foreground content column
-  (`_GlassCard` panels: current conditions, stat grid, 5-day forecast strip
-  reusing `_DayCol`/`get_icon_path`). Tapping a forecast day opens the existing
-  `DayDetailModal` unchanged.
-- `_FavToggle(Button)` — compact on/off chip for a "favorite" room, shown in
-  the header next to the city name. Mirrors `RoomCard`'s toggle flow exactly
-  (optimistic UI, threaded `set_group_on`, `log_event`/`_mark_huecontrol`,
-  rollback on error) so a kiosk tap behaves identically to a grid-card tap.
+- `WeatherKiosk(FloatLayout)` — public surface: `update(data, lat, lon)`,
+  constructed with `on_back` callable. Layers (back to front): `_SkyBackground`
+  → `_CloudLayer` → `_SunMoonArc` → `_PrecipLayer` → foreground content column
+  (a `_GlassCard` hero "current conditions" card, a `_GlassCard` stats row, and
+  a 5-day forecast strip reusing `_DayCol`/`get_icon_path`). Tapping a forecast
+  day opens the existing `DayDetailModal` unchanged.
+- No separate header bar — the hero card *is* the kiosk's only chrome: its top
+  row folds in the back arrow (top-left) and a live clock + "Updated H:MMam"
+  stamp (top-right), with the big current-conditions row (icon, temp, condition,
+  "feels like", mini Humidity/Wind stats) filling the rest of the card. No city
+  label — the kiosk only ever shows local conditions, so naming the place was
+  redundant chrome.
+- `_STATS` is a fixed 4-tile row — UV Index, Gusts, Pressure, Sunrise · Sunset.
+  Humidity and Wind moved out of the grid into mini-stat columns inside the
+  hero card; Visibility and Cloud Cover were dropped from display entirely
+  (still fetched for the ambient layers, just not shown as tiles) — see the
+  Sixth-pass log entry for why.
 - Always rendered in the same dark-navy palette as `WeatherModal`, regardless of
   app theme — consistent ambient look day or night.
 - A single `Clock.schedule_interval(..., 60)` ticks the live clock and recomputes
@@ -63,14 +70,6 @@ New module `ui_weather_kiosk.py` (mirrors the `ui_cards.py`/`ui_panels.py` split
   `header` + `scroll` (same `clear_widgets`/`add_widget` pattern as sort mode),
   restoring them on the kiosk's back-arrow tap. SSE/weather/Supabase threads stay
   anchored in `RoomGrid` throughout — nothing is torn down.
-
-## Light favorites — shipped
-What started as a deferred "future idea" (1-2 on/off-only quick-toggle buttons
-for frequently-used rooms, no slider) shipped directly into the header: the
-kiosk always shows toggles for the **first two entries in the user's
-`room_order`** (`hue_settings.json` — "top two per the local config"), each a
-compact `_FavToggle` chip colored amber when on / navy when off. See the build
-log below for the final design.
 
 ## Build notes / progress log
 - ✅ Data layer switched to `current=` params (lumio_weather.py) — verified
@@ -186,3 +185,165 @@ log below for the final design.
     sky — same family of bug). Grew `_forecast` 118→136px, borrowing from the
     ~46px of slack already sitting above the header (BoxLayout's unfilled
     space lands at the top when no child has `size_hint_y=1`).
+- 🔧 Fourth pass — structural rebuild from a cleaner mockup ("not even close to
+  the visual I provided... ask questions"). Walked through the new mockup with
+  the user before touching code:
+  - **Header bar removed entirely.** No more separate `_build_header` row —
+    the city label is gone too ("gone, dont need, you always assume local
+    conditions") and the favorite-room toggle chips were dropped from the
+    kiosk altogether (`_FavToggle`/`set_favorites`/`_kiosk_favorites` and
+    their constants deleted as dead code, along with the now-unused
+    `threading`/`mainthread`/`log_event`/`_mark_huecontrol` imports).
+  - **Current-conditions card became the kiosk's only "chrome"**, folding in
+    what the header used to own: a thin top row inside the card holds the `←`
+    back button (left) and the clock + "Updated H:MM" (right, plain text on
+    the card's navy glass — the blue box around the clock in the mockup was
+    confirmed to be a Paint selection-marquee artifact, not a design intent).
+    Below that, the existing icon/temp/condition/mini-stats row.
+  - **"Clear" now sits beside "83°F"** instead of stacked under it: split the
+    old single centered `text_col` into a left-anchored `_temp_lbl` (width
+    bound to `texture_size` so it hugs the digits for both "73°F" and
+    "100°F" — no ragged gap sized for the longest case) plus a small two-line
+    `cond_col` (`_cond_lbl` over `_feels_lbl`) immediately to its right —
+    matches the mockup's `[icon][BIG temp][Clear / Feels like]` row.
+  - Card height grew 110→152px to fit the new top row; the separate header's
+    52px + spacing freed up more than that, and the remainder plus the
+    forecast-strip work below absorbed it — net layout sums to the kiosk's
+    full content height with zero leftover slack.
+- 🔧 Fifth pass — fill the freed space ("lot of dead space at the top, shift
+  up and fill, expand bottom tiles too... bottom font still needs increased,
+  bold, and love"):
+  - `_forecast` strip grew 136→184px — absorbs the ~48px that used to sit as
+    dead space above the header. The three card heights (152 + 96 + 184) now
+    sum exactly to the kiosk's available content height, so the hero card
+    sits flush at the top with no gap.
+  - `_DayCol` tiles enlarged to fill the bigger strip and read bolder: day
+    name 13→16sp, icon 34→42px, condition/precip 12→14sp, high temp 17→20sp,
+    low temp 13→15sp (now also bold, matching the rest of the tile's weight).
+    Padding grew 6→16px top/bottom and spacing 2→4px so the larger content
+    fills the taller tile rather than floating in extra blank space —
+    `_DayCol.minimum_height` (180px) now lands ~4px under the 184px cell, so
+    nothing overflows the `_GlassCard` background (the clipping bug from the
+    third pass doesn't recur).
+- 🔧 Sixth pass — stats card cleanup, from a screenshot the user re-edited
+  in Paint ("you have elements i removed... this, only this, this is the
+  way... biggie size all that, so much whitespace"):
+  - Dropped `Visibility` and `Cloud Cover` from `_STATS` — down to four:
+    UV Index, Gusts, Pressure, Sunrise · Sunset (the underlying `cloud_pct`
+    data still feeds the ambient sky/cloud layers; only the tile display was
+    removed). Grid went `cols=3` (3×2, two cells empty) → `cols=4` (one full
+    row, no empty cells — "what there are no empty cells?").
+  - Caption/value text enlarged to fill the now-roomier single-row cells:
+    caption 10→13sp (height 14→20), value 15→24sp (height 22→36), with
+    `spacing=4` added between them — fills the card's existing 96px height
+    instead of leaving it looking sparse.
+- 🔧 Seventh pass — overflow fix, bigger arrow, bolder stat tiles ("overflow
+  text... arrow needs to be much bigger... weather tile font needs to be much
+  larger and bold... it's a tiny ass screen"):
+  - **Sunrise · Sunset overflow fixed.** At the stats card's shared 26sp, the
+    string `"6:00 AM  →  8:56 PM"` ran past its grid cell into the card's
+    border. That stat now gets its own smaller size (16sp) plus a
+    width-bound `text_size`/`halign='center'`/`shorten=True` safety net —
+    confirmed via runtime measurement that it renders at its full text, not
+    truncated, comfortably inside its 178px-wide cell with margin to spare.
+  - **Back arrow grew 22sp/44×34px → 34sp/70×46px** — "much bigger" was a
+    direct, unambiguous ask for a touch target on an 800×480 screen; the top
+    row grew 34→46px and the hero card +12 (152→164) to fit it.
+  - **Stat captions went from 13sp/regular → 15sp/bold** (the one element in
+    that card still small and un-bold — "weather tile font needs to be much
+    larger and bold"); values for the three short stats bumped 24→26sp.
+    Stats card height gave back the hero's +12 (96→84, tighter padding
+    8→6 top/bottom) — the three card heights (164+84+184) still sum to
+    exactly the kiosk's content height with zero slack.
+- 🔧 Eighth pass — hero fill/centering + forecast tile font sweep ("top
+  hero... fill the space, go so much bigger, center horizontal and
+  vertical, increase font... forecast tiles, day headers... need to be
+  much larger... all the fonts, the 'rain 80%' etc, its all tiny, biggie
+  size!" — stats card confirmed good as-is, untouched):
+  - **Hero card "fill + center."** Temp 52→62sp, icon bbox 110→128px,
+    condition 18→22sp (now bold), feels-like 13→16sp, mini-stat caption
+    14sp/value 26sp (was 12/22). `cond_col` and each `_add_mini_stat`
+    column got `Widget(size_hint_y=1)` flex spacers bookending their
+    label block — without them, a vertical `BoxLayout`'s unfilled slack
+    lands above the first child, so "Clear / Feels like" and "Humidity /
+    75%" sat low against the card floor instead of vertically centered
+    beside the full-height temp/icon ("center horizontal and vertical").
+  - **Fixed a self-inflicted `_temp_lbl` wrap bug** the 62sp bump
+    exposed: its old `text_size=(self.width, None)` binding created a
+    feedback loop with the `texture_size→width` binding — at the larger
+    size "70°F" no longer fit the seed `width=120`, got wrapped to two
+    lines, and the wrapped width then capped itself at 120 forever
+    (measured `texture_size=[120, 146]`, i.e. two lines). Removed the
+    `text_size`/`halign`/`valign` entirely — with no `text_size`, Kivy
+    just centers the natural single-line texture in the widget's box on
+    both axes (which is what `halign="left", valign="middle"` were
+    trying to do anyway), and the `texture_size→width` binding can't
+    self-trap. Confirmed via runtime measurement: single line,
+    `texture_size=[130, 73]`, comfortably inside the 92px row.
+  - **Forecast tiles, full font sweep**: day header 16→20sp, icon
+    42→44px, condition/precip ("Overcast 23%" etc) 14→18sp, high
+    20→24sp, low 15→18sp. Padding/spacing trimmed (16/4 → 8/3) to fund
+    it — `_DayCol.minimum_height` lands at 178 against the 184px cell
+    (6px buffer), confirmed via runtime measurement and screenshot: no
+    clipping, every line reads noticeably bigger and bolder.
+- 🔧 Ninth pass — overflow fix from the "like this big" temp bump (an
+  annotated screenshot circling "68°F" at roughly double its on-screen
+  size; landed at 115sp, up from 88):
+  - **Horizontal overflow fixed.** At 115sp the temp alone claims ~240px
+    of `main_row`'s ~720px budget — `cond_col`, which had been sizing
+    itself freely to its text, plus the mini-stat columns no longer fit;
+    "Wind" rendered off the right edge of the card. Rewrote `cond_col` to
+    a **fixed width (145px)** with `shorten=True, shorten_from='right'`
+    and a `text_size=(width, height)` binding — the same pattern the
+    'sun' stat already used for the same reason (overflow text). 145px
+    fits every common condition string without truncating ("Partly
+    cloudy", "Mostly clear", "Heavy showers"); rare long ones now ellipsis
+    instead of blowing out the layout.
+  - **Mini-stats narrowed 110→80px** (`_add_mini_stat` gained a `width=`
+    parameter) — between the much wider temp and the now fixed-width
+    condition block, the row had no spare room for them at their old size.
+  - Verified via runtime measurement: zero overflow, "Wind" flush inside
+    the card's right edge.
+- 🔧 Tenth pass — sun-arc reposition ("shift up, can the lines still be
+  kind of sharp?"):
+  - `_SunMoonArc._HORIZON` raised **60 → 100**. At low sun elevation (near
+    sunrise/sunset) the glow's lowest point on the arc sat right behind
+    the forecast strip's corner, poking out from under the glass card
+    instead of glowing softly through the gap above it — raising the
+    floor moves that low point into the gap between the forecast and
+    stats cards instead.
+  - "the lines... sharp" confirmed as a check that raising `_HORIZON`
+    wouldn't blur or thin the glow rings/path — it doesn't; their alpha
+    and stroke width are untouched, only the arc's vertical travel range
+    changes.
+- 🔧 Eleventh pass — hero "shift up + center" (clarified via
+  `AskUserQuestion` from "temp and F and words next to up and center in
+  the hero" → user picked "shift the text cluster up + center it"):
+  - **`_temp_lbl` re-anchored to the top of the row.** Replaced its old
+    `text_size`-driven centering with a `temp_col` wrapper: a vertical
+    `BoxLayout` (width bound to the label's `texture_size`-driven width)
+    holding the label followed by a trailing `Widget(size_hint_y=1)` flex
+    spacer — the established "top-anchor via trailing flex spacer"
+    pattern, confirmed empirically earlier this session (a vertical
+    `BoxLayout`'s unfilled slack lands above its first child unless
+    something downstream claims it).
+  - **New, more robust `_temp_lbl` sizing**: rather than track only
+    `width` off `texture_size` (the Eighth-pass fix — see above), this
+    pass binds the label's whole `size` to `texture_size` (both width
+    *and* height). With no leftover bbox on either axis, there's nothing
+    left for Kivy to center the glyph texture within — eliminating the
+    wrap-trap class of bug at its root rather than patching around it.
+  - **`cond_col` top-anchored to match** — gained the same trailing
+    `Widget(size_hint_y=1)` spacer so "Mostly clear / Feels like 71°"
+    sits level with the top of "72°F" instead of vertically centered
+    against the full-height icon.
+  - **Centered the {temp, condition} cluster as a group** — flanked
+    `temp_col`/`cond_col` with `Widget(size_hint_x=1)` flex spacers on
+    each side, drifting the pair toward `main_row`'s horizontal middle
+    instead of hugging the icon's left edge ("center ... as a group").
+  - Funded the new spacers (without re-tripping the Ninth-pass overflow)
+    by narrowing further: icon **114→106px**, mini-stats **80→76px**,
+    `main_row` spacing **12→11**.
+  - Verified via runtime measurement: `mini_wind` right edge = `main_row`
+    right edge = 760.0px (flush, zero overflow); both flex-spacer pairs
+    measure ≈5.5px each — symmetric, confirming true horizontal centering.
