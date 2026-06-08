@@ -1,6 +1,6 @@
 # Lumio
 
-[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.7.0-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.7.0) ![Date](https://img.shields.io/badge/updated-2026--06--07-lightgrey)
+[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.7.0-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.7.0) ![Date](https://img.shields.io/badge/updated-2026--06--08-lightgrey)
 
 A touchscreen Philips Hue controller built with Python and Kivy, designed for a Raspberry Pi 4 with the official 7" display. Runs as a local full-screen panel — no cloud, no browser, no subscription.
 
