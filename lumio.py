@@ -11,11 +11,15 @@ Run on Pi (fullscreen):
     DISPLAY=:0 python lumio.py
 """
 
+import platform
 import threading
 
 # ── Kivy config — must happen before any other kivy imports ───────────────────
 
-DEV_WINDOW_SIZE = (800, 480)   # set None on Pi to use display native size
+
+# Windowed on the dev box, native fullscreen on the Pi — so the same file
+# can be copied to both without editing this line.
+DEV_WINDOW_SIZE = (800, 480) if platform.system() == "Windows" else None
 
 from kivy.config import Config
 Config.set('input', 'mouse', 'mouse,disable_multitouch')
@@ -86,6 +90,9 @@ class RoomGrid(BoxLayout):
         self._last_groups     = {}   # raw groups dict from last fetch
         self._light_to_group  = {}   # light_id → group_id (for SSE routing)
         self._sse_started     = False
+        self._refresh_lock     = threading.Lock()
+        self._refresh_inflight = set()   # gids with a get_group() in flight
+        self._refresh_dirty    = set()   # gids that changed again mid-flight
         self._last_weather      = ""
         self._last_weather_data = None
         self._weather_wake      = threading.Event()
@@ -101,12 +108,10 @@ class RoomGrid(BoxLayout):
 
         self.header = HeaderBar(
             on_edit_toggle=self._toggle_edit,
-            on_theme_toggle=self._toggle_theme,
             on_settings_open=self._open_settings,
             on_weather_tap=self._open_weather,
             # on_all_off=self._all_off,  # All Off button — enable if needed
         )
-        self.header.set_theme_label(self._dark_mode)
         self.add_widget(self.header)
 
         self.scroll = ScrollView(
@@ -148,7 +153,6 @@ class RoomGrid(BoxLayout):
         Window.clearcolor        = C.BG
         self._bg_color_inst.rgba = C.BG
         self.header.refresh_colors()
-        self.header.set_theme_label(self._dark_mode)
         self.header.set_edit_active(self._edit_mode)
         for card in self.cards.values():
             card.refresh_colors()
@@ -164,12 +168,15 @@ class RoomGrid(BoxLayout):
     # ── weather ───────────────────────────────────────────────────────────────
 
     def _weather_loop(self):
-        lat, lon = _resolve_location(self._settings)
-        if lat is None:
-            return
+        lat = lon = None
         while True:
             if self._settings.get("show_weather", True):
-                data = _fetch_weather(lat, lon)
+                if lat is None:
+                    # Retried each cycle rather than resolved once at startup —
+                    # the Pi routinely boots before Wi-Fi is up, and giving up
+                    # here used to mean no weather for the life of the process.
+                    lat, lon = _resolve_location(self._settings)
+                data = _fetch_weather(lat, lon) if lat is not None else None
                 if data:
                     self._last_weather      = data["label"]
                     self._last_weather_data = data
@@ -206,16 +213,22 @@ class RoomGrid(BoxLayout):
             return
         if self._kiosk is None:
             self._kiosk = WeatherKiosk(on_back=self._show_room_grid)
+        if self._kiosk.parent is not None:
+            return
         self._push_weather_to_kiosk()
         self.remove_widget(self.header)
         self.remove_widget(self.scroll)
         self.add_widget(self._kiosk)
+        self._kiosk.start()
 
     def _show_room_grid(self):
         if self._kiosk is not None:
+            self._kiosk.stop()          # release its timers while hidden
             self.remove_widget(self._kiosk)
-        self.add_widget(self.header)
-        self.add_widget(self.scroll)
+        if self.header.parent is None:
+            self.add_widget(self.header)
+        if self.scroll.parent is None:
+            self.add_widget(self.scroll)
 
     # ── edit mode ─────────────────────────────────────────────────────────────
 
@@ -382,7 +395,8 @@ class RoomGrid(BoxLayout):
                 continue
             if not isinstance(events, list):
                 continue
-            # affected: gid → {owner_type, ts, on (bool|None), bri_pct (int|None)}
+            # affected: gid → {owner_type, ts, on (bool|None), bri_pct (int|None),
+            #                  from_light (bool)}
             affected = {}
             for event in events:
                 ct = event.get("creationtime")
@@ -393,26 +407,49 @@ class RoomGrid(BoxLayout):
                     bri_raw    = item.get("dimming", {}).get("brightness")
                     bri_pct    = round(bri_raw) if bri_raw is not None else None
 
-                    gid = None
+                    gid        = None
+                    from_light = False
                     if id_v1.startswith("/lights/"):
                         lid = id_v1.split("/")[-1]
                         gid = self._light_to_group.get(lid)
+                        from_light = True
                     elif id_v1.startswith("/groups/"):
                         g = id_v1.split("/")[-1]
                         if g in self.cards:
                             gid = g
 
-                    if gid and gid not in affected:
+                    if not gid:
+                        continue
+
+                    prev = affected.get(gid)
+                    if prev is None:
                         affected[gid] = {
                             "owner_type": owner_type, "ts": ct,
                             "on": on_val, "bri_pct": bri_pct,
+                            "from_light": from_light,
                         }
+                        continue
+
+                    # Same room touched twice in one batch (e.g. two lights in
+                    # the room): merge instead of dropping the later event.
+                    # Any light reporting on ⇒ the room is on.
+                    if on_val is not None:
+                        prev["on"] = True if (prev["on"] or on_val) else False
+                    if bri_pct is not None:
+                        prev["bri_pct"] = bri_pct
+                    if not from_light:
+                        prev["from_light"] = False
+                    if prev["owner_type"] is None:
+                        prev["owner_type"] = owner_type
 
             for gid, meta in affected.items():
                 card = self.cards.get(gid)
+                if card is None:
+                    continue          # hidden room — no card to update
                 if not _is_huecontrol_recent(gid):
                     if card and (meta["on"] is not None or meta["bri_pct"] is not None):
-                        card.apply_sse_state(meta["on"], meta["bri_pct"])
+                        card.apply_sse_state(meta["on"], meta["bri_pct"],
+                                             from_light=meta["from_light"])
                     if _should_log_sse(gid) and card:
                         bri_pct = meta["bri_pct"] if meta["bri_pct"] is not None \
                                   else round(card._bri / 254 * 100)
@@ -425,19 +462,39 @@ class RoomGrid(BoxLayout):
                             log_event(card._room_name, gid, "brightness",
                                       bri_pct, "external",
                                       meta["owner_type"], meta["ts"])
-                threading.Thread(
-                    target=self._refresh_group, args=(gid,), daemon=True
-                ).start()
+                self._request_refresh(gid)
+
+    def _request_refresh(self, gid: str):
+        """Queue a state refresh for one room, at most one in flight at a time.
+
+        A schedule fades over seconds or minutes, so the bridge emits a burst of
+        SSE events the whole time. Spawning a thread per event floods the bridge
+        and lets an older get_group() reply land after a newer one, leaving the
+        card stuck on stale state. Coalescing keeps one request per room and
+        re-runs it once afterwards if more events arrived meanwhile.
+        """
+        with self._refresh_lock:
+            if gid in self._refresh_inflight:
+                self._refresh_dirty.add(gid)
+                return
+            self._refresh_inflight.add(gid)
+        threading.Thread(target=self._refresh_group, args=(gid,), daemon=True).start()
 
     def _refresh_group(self, gid: str):
-        try:
-            group = self.api.get_group(gid)
-            card  = self.cards.get(gid)
-            if card:
-                card.apply_group(group)
-        except Exception as exc:
-            print(f"[SSE] refresh group {gid}: {exc}")
-            log_system("error", f"refresh group {gid}: {exc}")
+        while True:
+            try:
+                group = self.api.get_group(gid)
+                card  = self.cards.get(gid)
+                if card:
+                    card.apply_group(group)
+            except Exception as exc:
+                print(f"[SSE] refresh group {gid}: {exc}")
+                log_system("error", f"refresh group {gid}: {exc}")
+            with self._refresh_lock:
+                if gid not in self._refresh_dirty:
+                    self._refresh_inflight.discard(gid)
+                    return
+                self._refresh_dirty.discard(gid)   # events arrived — fetch once more
 
 
 # ── Error screen ──────────────────────────────────────────────────────────────

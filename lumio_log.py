@@ -27,6 +27,10 @@ _outbox_wake     = threading.Event()
 _outbox_started  = False
 _on_sync_error   = None   # callable(msg) — registered by RoomGrid at startup
 
+_log_max_mb  = 5.0
+_write_count = 0
+_TRIM_EVERY  = 200   # re-check the log size every N entries, not just at startup
+
 
 # ── Hue-control recency tracking ─────────────────────────────────────────────
 
@@ -50,12 +54,18 @@ def _should_log_sse(gid: str, window: float = 5.0) -> bool:
 # ── Initialisation ────────────────────────────────────────────────────────────
 
 def init_logging(settings: dict) -> None:
-    """Initialise logging subsystem from settings. Call once at startup."""
-    global _logging_enabled, _supabase_client, _outbox_started
+    """Initialise logging subsystem from settings. Call once at startup.
+
+    The Supabase client and outbox worker are set up even when logging starts
+    disabled: the settings popup can switch logging back on at runtime, and
+    returning early here used to leave that session with no client and no
+    worker, so entries piled up locally and silently never synced. Both the
+    worker and the write path gate on _logging_enabled instead.
+    """
+    global _logging_enabled, _supabase_client, _outbox_started, _log_max_mb
     _logging_enabled = settings.get("logging_enabled", True)
-    if not _logging_enabled:
-        return
-    _trim_log_file(settings.get("log_max_mb", 5))
+    _log_max_mb      = float(settings.get("log_max_mb", 5))
+    _trim_log_file(_log_max_mb)
     url = settings.get("supabase_url", "")
     key = settings.get("supabase_key", "")
     if url and key and _SUPABASE_LIB:
@@ -156,6 +166,26 @@ def _flush_to_supabase() -> None:
 
 # ── Public logging API ────────────────────────────────────────────────────────
 
+def _write(entry: dict) -> None:
+    """Append one JSONL line and periodically re-check the file size."""
+    global _write_count
+    with _log_lock:
+        with open(LOG_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+        _write_count += 1
+        due_for_trim = _write_count % _TRIM_EVERY == 0
+    if due_for_trim:
+        # Startup was the only trim point before, so a kiosk that runs for
+        # months without a restart grew hue_log.jsonl without bound.
+        _trim_log_file(_log_max_mb)
+    if _supabase_client:
+        _outbox_wake.set()
+
+
+def _now_iso() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 def log_event(room: str, room_id: str, event: str, bri_pct: int,
               source: str, owner_type: str = None, ts: str = None, **extra) -> None:
     """Append one JSONL line to hue_log.jsonl (thread-safe)."""
@@ -163,7 +193,7 @@ def log_event(room: str, room_id: str, event: str, bri_pct: int,
         return
     entry = {
         "_lid":    str(uuid.uuid4()),
-        "ts":      ts or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+        "ts":      ts or _now_iso(),
         "room":    room,
         "room_id": room_id,
         "event":   event,
@@ -173,11 +203,7 @@ def log_event(room: str, room_id: str, event: str, bri_pct: int,
     if owner_type:
         entry["owner_type"] = owner_type
     entry.update(extra)
-    with _log_lock:
-        with open(LOG_FILE, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    if _supabase_client:
-        _outbox_wake.set()
+    _write(entry)
 
 
 def log_system(event: str, detail: str = None) -> None:
@@ -186,14 +212,10 @@ def log_system(event: str, detail: str = None) -> None:
         return
     entry = {
         "_lid":   str(uuid.uuid4()),
-        "ts":     datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+        "ts":     _now_iso(),
         "event":  event,
         "source": "system",
     }
     if detail:
         entry["detail"] = detail
-    with _log_lock:
-        with open(LOG_FILE, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    if _supabase_client:
-        _outbox_wake.set()
+    _write(entry)

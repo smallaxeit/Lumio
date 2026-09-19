@@ -5,7 +5,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>hue_app.py</StartupFile>
+    <StartupFile>lumio.py</StartupFile>
     <SearchPath></SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
@@ -22,13 +22,25 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="hue_app.py" />
+    <Compile Include="lumio.py" />
+    <Compile Include="theme.py" />
+    <Compile Include="lumio_api.py" />
+    <Compile Include="lumio_log.py" />
+    <Compile Include="lumio_weather.py" />
+    <Compile Include="lumio_brightness.py" />
+    <Compile Include="ui_cards.py" />
+    <Compile Include="ui_panels.py" />
+    <Compile Include="ui_weather_kiosk.py" />
     <Compile Include="hue_discovery.py" />
   </ItemGroup>
   <ItemGroup>
     <Content Include=".gitignore" />
     <Content Include="README.md" />
+    <Content Include="PI_SETUP.md" />
+    <Content Include="WEATHER_KIOSK.md" />
+    <Content Include="LICENSE.md" />
     <Content Include="hue_settings.example.json" />
+    <Content Include="lumio.service" />
     <Content Include="PiProject1_HueScreen.sql" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />

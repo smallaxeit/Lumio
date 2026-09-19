@@ -749,7 +749,10 @@ class DayDetailModal(ModalView):
 class HeaderBar(BoxLayout):
     """Top bar: ☰ settings | weather/status label | ↕ sort-toggle (always visible)."""
 
-    def __init__(self, on_edit_toggle, on_theme_toggle, on_settings_open,
+    # NOTE: on_all_off is accepted but nothing here builds an All Off button —
+    # re-enabling the commented-out call site in lumio.py alone will not bring
+    # the feature back; the button still has to be built and added below.
+    def __init__(self, on_edit_toggle, on_settings_open,
                  on_weather_tap=None, on_all_off=None, **kwargs):
         super().__init__(
             orientation="horizontal",
@@ -766,9 +769,6 @@ class HeaderBar(BoxLayout):
 
         self._weather_text  = ""    # last known weather string
         self._status_revert = None  # pending Clock event to restore weather after status
-
-        self.alloff_btn = None
-        self.theme_btn  = None   # theme toggle moved into settings popup
 
         # ☰ hamburger — far left
         self.settings_btn = Button(
@@ -842,9 +842,6 @@ class HeaderBar(BoxLayout):
 
     def set_edit_active(self, active: bool):
         self.edit_btn.text = "✔" if active else "↕"
-
-    def set_theme_label(self, dark_mode: bool):
-        pass  # theme toggle moved into settings popup
 
     def refresh_colors(self):
         self._hdr_color.rgba    = C.HEADER_BG

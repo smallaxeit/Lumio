@@ -7,6 +7,7 @@ module sees the new colors immediately without re-importing.
 import json
 import os
 import platform
+import threading
 
 # ── File paths ─────────────────────────────────────────────────────────────────
 
@@ -111,9 +112,25 @@ def load_settings() -> dict:
             pass
     return {"hidden_rooms": [], "room_order": []}
 
+_settings_lock = threading.Lock()
+
+
 def save_settings(settings: dict) -> None:
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f)
+    """Persist settings atomically.
+
+    Theme toggles, card moves, the settings popup and weather geolocation all
+    save from their own threads, and the Pi is a kiosk that gets power-cut
+    rather than shut down. Truncating the file in place risked interleaved
+    writes and, on a bad cut, a zero-byte hue_settings.json — which would take
+    the bridge credentials with it and leave the app on the error screen.
+    """
+    with _settings_lock:
+        tmp = SETTINGS_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(settings, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, SETTINGS_FILE)
 
 # ── Room ordering utility ──────────────────────────────────────────────────────
 

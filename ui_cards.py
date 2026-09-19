@@ -1,6 +1,7 @@
 """ui_cards.py — Room card widget."""
 
 import threading
+import time
 
 from kivy.clock import Clock, mainthread
 from kivy.graphics import Color, RoundedRectangle
@@ -31,6 +32,7 @@ class RoomCard(BoxLayout):
     """
 
     SLIDER_DEBOUNCE = 0.35
+    LOCAL_GUARD     = 2.0   # ignore bridge state for this long after our own command
 
     def __init__(self, group_id: str, group: dict, api,
                  on_move=None, **kwargs):
@@ -47,6 +49,7 @@ class RoomCard(BoxLayout):
         self._slider_ev  = None
         self._updating   = False
         self._in_edit    = False
+        self._local_ts   = 0.0   # time.time() of our last command to the bridge
 
         state  = group.get("state", {})
         action = group.get("action", {})
@@ -160,6 +163,7 @@ class RoomCard(BoxLayout):
 
     def _send_off(self):
         _mark_huecontrol(self.group_id)
+        self._local_ts = time.time()
         try:
             self.api.set_group_on(self.group_id, False)
             log_event(self._room_name, self.group_id, "off", 0, "lumio")
@@ -203,6 +207,7 @@ class RoomCard(BoxLayout):
 
     def _send_toggle(self, new_state: bool):
         _mark_huecontrol(self.group_id)
+        self._local_ts = time.time()
         try:
             self.api.set_group_on(self.group_id, new_state)
             log_event(self._room_name, self.group_id,
@@ -227,14 +232,20 @@ class RoomCard(BoxLayout):
         if self._slider_ev:
             self._slider_ev.cancel()
         self._slider_ev = Clock.schedule_once(
-            lambda _dt: threading.Thread(
-                target=self._send_brightness, args=(self._bri,), daemon=True
-            ).start(),
-            self.SLIDER_DEBOUNCE,
+            self._fire_brightness, self.SLIDER_DEBOUNCE
         )
+
+    def _fire_brightness(self, _dt):
+        """Debounce expired — release the guard and push the value to the bridge."""
+        self._slider_ev = None
+        self._local_ts  = time.time()
+        threading.Thread(
+            target=self._send_brightness, args=(self._bri,), daemon=True
+        ).start()
 
     def _send_brightness(self, bri: int):
         _mark_huecontrol(self.group_id)
+        self._local_ts = time.time()
         try:
             self.api.set_group_brightness(self.group_id, bri)
             log_event(self._room_name, self.group_id,
@@ -249,7 +260,12 @@ class RoomCard(BoxLayout):
 
     @mainthread
     def apply_group(self, group: dict):
-        if self._pending or self._slider_ev:
+        # Skip while a command is in flight, a slider drag is still settling, or
+        # the bridge may not have applied our last command yet — otherwise stale
+        # state would overwrite what the user just did.
+        if (self._pending
+                or self._slider_ev is not None
+                or time.time() - self._local_ts < self.LOCAL_GUARD):
             return
         self._light_ids = group.get("lights", self._light_ids)
         self._is_on     = group.get("state", {}).get("any_on", False)
@@ -258,11 +274,16 @@ class RoomCard(BoxLayout):
         self._set_slider(bri)
 
     @mainthread
-    def apply_sse_state(self, on, bri_pct):
-        """Immediately reflect a known SSE state change without an API round-trip."""
+    def apply_sse_state(self, on, bri_pct, from_light: bool = False):
+        """Immediately reflect a known SSE state change without an API round-trip.
+
+        A single light going off does not mean the room is off when the room has
+        several lights — in that case leave the on-state to the follow-up
+        get_group() call, which reports the real any_on.
+        """
         if self._pending:
             return
-        if on is not None:
+        if on is not None and not (from_light and not on and len(self._light_ids) > 1):
             self._apply_on_state(on)
         if bri_pct is not None:
             self._set_slider(round(bri_pct / 100 * 254))

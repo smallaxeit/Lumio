@@ -282,14 +282,27 @@ class _CloudLayer(Widget):
             return
         for c in self._clouds:
             if not c['animating']:
-                c['widget'].pos = (self.x + c['rel_x'] * self.width,
-                                   self.y + c['rel_y'] * self.height)
+                c['base_x'] = self.x + c['rel_x'] * self.width
+                c['widget'].pos = (c['base_x'], self.y + c['rel_y'] * self.height)
+                self._start_drift(c)
+
+    def pause(self):
+        """Stop drift animations while the kiosk is off-screen."""
+        for c in self._clouds:
+            Animation.cancel_all(c['widget'])
+            c['animating'] = False
+
+    def resume(self):
+        for c in self._clouds:
+            if not c['animating'] and 'base_x' in c:
                 self._start_drift(c)
 
     def _start_drift(self, c):
         c['animating'] = True
         widget, sway, duration = c['widget'], c['sway'], c['duration']
-        base_x = widget.x
+        # Anchored to the laid-out origin, not the current x, so repeated
+        # pause/resume cycles don't walk the cloud across the screen.
+        base_x = c['base_x']
 
         def _go_back(*_a):
             back = Animation(x=base_x, duration=duration, t='in_out_sine')
@@ -383,10 +396,18 @@ class _PrecipLayer(Widget):
                 r = instr.size[0] / 2
                 instr.pos = (d['x'] - r, d['y'] - r)
 
-    def _stop(self):
+    def pause(self):
+        """Halt the 30fps step while the kiosk is off-screen (keeps the drops)."""
         if self._ev is not None:
             self._ev.cancel()
             self._ev = None
+
+    def resume(self):
+        if self._ev is None and self._drops:
+            self._ev = Clock.schedule_interval(self._step, 1 / 30)
+
+    def _stop(self):
+        self.pause()
         self.canvas.clear()
         self._drops = []
         self._color = None
@@ -743,6 +764,27 @@ class WeatherKiosk(FloatLayout):
         ).open()
 
     # -- ambient ticking ----------------------------------------------------------
+
+    def stop(self):
+        """Suspend every timer and animation — call when the kiosk is hidden.
+
+        Without this the 30fps precipitation step, the cloud drift animations
+        and the 60s clock tick all keep running against an off-screen widget
+        for the rest of the process's life, which on a Pi is a permanent and
+        completely invisible CPU cost.
+        """
+        if self._tick_ev is not None:
+            self._tick_ev.cancel()
+            self._tick_ev = None
+        self._precip.pause()
+        self._clouds.pause()
+
+    def start(self):
+        """Resume timers when the kiosk is shown again."""
+        self._precip.resume()
+        self._clouds.resume()
+        if self._data:
+            self._start_ticking()
 
     def _start_ticking(self):
         if self._tick_ev is None:

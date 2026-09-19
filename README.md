@@ -1,6 +1,6 @@
 # Lumio
 
-[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.7.0-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.7.0) ![Date](https://img.shields.io/badge/updated-2026--06--08-lightgrey)
+[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.7.1-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.7.1) ![Date](https://img.shields.io/badge/updated-2026--09--19-lightgrey)
 
 A touchscreen Philips Hue controller built with Python and Kivy, designed for a Raspberry Pi 4 with the official 7" display. Runs as a local full-screen panel — no cloud, no browser, no subscription.
 
@@ -41,7 +41,6 @@ python lumio.py
 **Lighting**
 - Room grid with on/off toggle and brightness slider
 - Real-time updates via Hue CLIP v2 SSE event stream
-- Per-room light detail (long-press a room card)
 - Room reordering via ▲▼ per-card buttons in sort mode — reliable on Pi touchscreen with no gesture jitter
 - Event logging (on/off, brightness, source, timestamp) to `hue_log.jsonl`
 
@@ -71,6 +70,8 @@ python lumio.py
 - Show/hide weather toggle
 - Advanced section (collapsible): Enable Logging, Show Sync Errors
 - Per-room controls: show/hide in grid + include/exclude from All Off
+
+> **All Off is currently disabled.** The header button is commented out in `lumio.py` *and* `HeaderBar` never builds it, so re-enabling the call site alone will not bring it back — the button still has to be constructed and added. The settings popup's per-room "All Off" column and the `exempt_rooms` key are still live and still saved, so the UI lets you configure a feature that cannot fire.
 
 ---
 
@@ -340,19 +341,25 @@ All light changes are written to `hue_log.jsonl` (one JSON object per line). Thi
 lumio/
 ├── lumio.py                # Entry point — RoomGrid, ErrorScreen, LumioApp
 ├── theme.py                # Palette, mutable color container (C), shared constants
-├── ui_cards.py             # RoomCard, LightRow, RoomDetailModal
+├── ui_cards.py             # RoomCard
 ├── ui_panels.py            # SettingsPopup, WeatherModal, DayDetailModal, HeaderBar
+├── ui_weather_kiosk.py     # WeatherKiosk — full-screen ambient weather view
 ├── lumio_api.py            # HueAPI — Hue local REST + CLIP v2 SSE client
 ├── lumio_log.py            # Event logging (local JSONL) and Supabase sync
 ├── lumio_weather.py        # Open-Meteo weather fetching and IP geolocation
 ├── lumio_brightness.py     # Pi backlight brightness read/write
 ├── hue_discovery.py        # Bridge discovery and authentication (one-time setup)
 ├── assets/
-│   └── weather/            # Meteocons PNG icons (MIT) — mapped to WMO weather codes
+│   ├── weather/            # Meteocons PNG icons (MIT) — mapped to WMO weather codes
+│   └── screenshots/        # README screenshots
 ├── hue_settings.example.json  # Settings template (safe to commit)
 ├── hue_settings.json       # Your credentials and preferences (git-ignored)
 ├── hue_log.jsonl           # Event log (git-ignored)
+├── README.md               # This file
 ├── PI_SETUP.md             # Raspberry Pi environment setup guide
+├── WEATHER_KIOSK.md        # Weather Kiosk design and implementation notes
+├── LICENSE.md              # PolyForm Noncommercial 1.0.0
+├── lumio.service           # systemd unit (template — replace <username>)
 ├── Lumio.sln               # Visual Studio solution
 ├── Lumio.pyproj            # Visual Studio Python project
 └── .gitignore
@@ -396,6 +403,25 @@ git push origin v0.2.0
 ```
 
 ### Changelog
+
+## [0.7.1] - 2026-09-19
+### Fixed
+- **Room status could be wrong after a schedule ran.** Each SSE event spawned its own `get_group()` thread, so a schedule's fade — which streams events for its whole duration — produced hundreds of concurrent requests against the bridge. Replies landed out of order and an older snapshot could overwrite a newer one, leaving a card stuck on stale state. Refreshes are now coalesced to one in-flight request per room, re-running once afterwards if more events arrived.
+- **A room stopped updating for good once its brightness slider was touched.** The debounce handle (`_slider_ev`) was never cleared after firing, and `apply_group()` treats it as "a drag is in progress" — so that card ignored every background refresh for the rest of the session.
+- **One bulb turning off switched the whole room card to OFF.** A light-level `on: false` is now deferred to the follow-up `get_group()` for rooms with more than one light; `on: true` still applies immediately, since any light on means the room is on.
+- Multiple lights changing in one SSE batch no longer discard all but the first event.
+- **The weather kiosk left its timers running after you left it** — the 30fps precipitation stepper, cloud drift animations and the 60s clock tick all kept running against an off-screen widget for the life of the process. `stop()`/`start()` now suspend and resume them.
+- **`hue_settings.json` could be corrupted by a power cut or concurrent save**, taking the bridge credentials with it. Writes are now atomic (temp file + `os.replace`) and serialised behind a lock.
+- **Weather never recovered if the Pi booted before Wi-Fi was up.** Geolocation was resolved once at startup; it is now retried each poll cycle.
+- **`hue_log.jsonl` grew without bound between restarts** — trimming only happened at startup, and is now re-checked every 200 entries.
+- **Turning logging back on at runtime never resumed Supabase sync.** `init_logging()` returned early when logging started disabled, leaving the session with no client and no outbox worker.
+### Changed
+- `DEV_WINDOW_SIZE` resolves from the platform instead of being hardcoded, so the same `lumio.py` runs windowed on the dev box and fullscreen on the Pi with no per-machine edit.
+- Licence changed to PolyForm Noncommercial 1.0.0 (see [LICENSE.md](LICENSE.md)).
+### Removed
+- `hue_api.py` — dead duplicate of `lumio_api.py`, imported by nothing.
+- `HeaderBar.set_theme_label()` (a no-op since the theme toggle moved into the settings popup) and its unused `on_theme_toggle` parameter.
+- Stray unreferenced screenshot in `images/`.
 
 ## [0.7.0] - 2026-06-07
 ### Added
@@ -495,4 +521,8 @@ Create a **GitHub Release** from each tag to attach release notes and make versi
 
 ## License
 
-MIT
+[PolyForm Noncommercial License 1.0.0](LICENSE.md) — free to use, modify, and
+share for personal, hobby, educational, research, and other noncommercial
+purposes. Commercial use requires a separate license; open an issue to ask.
+
+Required Notice: Copyright 2026 Justin Kidd (https://github.com/smallaxeit/lumio)
