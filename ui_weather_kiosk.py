@@ -22,7 +22,7 @@ from kivy.uix.image import Image
 from kivy.uix.label import Label
 from kivy.uix.widget import Widget
 
-from theme import SYMBOL_FONT, _DayCol
+from theme import SYMBOL_FONT, _DayCol, _parse_color
 from lumio_weather import get_icon_path
 from ui_panels import DayDetailModal
 
@@ -34,6 +34,31 @@ _TEMP   = (0.95, 0.75, 0.25, 1)
 # Card fills are nearly opaque on purpose — at lower alpha the sun/moon glow
 # bleeds through from behind and washes out the text as a smudge mid-card.
 _CARD   = (0.12, 0.16, 0.29, 0.88)
+
+
+def apply_kiosk_overrides(settings: dict) -> None:
+    """Let hue_settings.json retint the kiosk without editing this file.
+
+    Only the four foreground/surface colors are exposed — the procedural sky,
+    glow and precipitation stay code-driven, since they are computed from live
+    weather rather than picked. Call once at startup, before the kiosk is built
+    (it is constructed lazily on first expand, so module globals are read then).
+    """
+    overrides = settings.get("kiosk_overrides")
+    if not isinstance(overrides, dict):
+        return
+    targets = {"text": "_TEXT", "sub": "_SUB", "accent": "_TEMP", "card": "_CARD"}
+    for key, value in overrides.items():
+        name = targets.get(key)
+        if name is None:
+            print(f"[kiosk] unknown color key ignored: {key}")
+            continue
+        try:
+            globals()[name] = _parse_color(value)
+        except ValueError as exc:
+            print(f"[kiosk] {key}: {exc}")
+    if "card" in overrides and isinstance(_CARD, tuple):
+        _GlassCard._FILL = _CARD
 
 # Sky gradient stops — (top_rgb, bottom_rgb), blended by time of day + desaturated
 # toward gray by cloud cover. Night wraps both ends of the day.

@@ -1,6 +1,6 @@
 # Lumio
 
-[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.7.1-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.7.1) ![Date](https://img.shields.io/badge/updated-2026--09--19-lightgrey)
+[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.7.2-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.7.2) ![Date](https://img.shields.io/badge/updated-2026--09--19-lightgrey)
 
 A touchscreen Philips Hue controller built with Python and Kivy, designed for a Raspberry Pi 4 with the official 7" display. Runs as a local full-screen panel — no cloud, no browser, no subscription.
 
@@ -174,6 +174,11 @@ All settings are stored in `hue_settings.json` (auto-created, never committed):
 | `username` | `hue_discovery.py` | Hue API key |
 | `hidden_rooms` | Settings popup | Room IDs hidden from the grid |
 | `exempt_rooms` | Settings popup | Room IDs excluded from the All Off button |
+| `ui_scale` | Hand-edited | Global text scale, 0.5–2.0 (default 1.0) |
+| `theme_overrides` | Hand-edited | Palette overrides applied to both themes |
+| `theme_overrides_dark` | Hand-edited | Palette overrides for dark mode only |
+| `theme_overrides_light` | Hand-edited | Palette overrides for light mode only |
+| `kiosk_overrides` | Hand-edited | Weather Kiosk colors (`text`, `sub`, `accent`, `card`) |
 | `room_order` | Sort mode (▲▼) | Saved card order |
 | `dark_mode` | Theme toggle | `true` = dark, `false` = light |
 | `screen_brightness` | Settings popup | Pi backlight level (10–255) |
@@ -188,6 +193,39 @@ All settings are stored in `hue_settings.json` (auto-created, never committed):
 | `supabase_key` | Manual | Your Supabase anon or service role key (optional) |
 
 See `hue_settings.example.json` for the expected structure.
+
+### Appearance tweaks
+
+The built-in light and dark palettes live in `theme.py`. Rather than editing
+them, override individual colors from `hue_settings.json` — the app falls back
+to the built-in value for anything you leave out, and an unknown key or an
+unparseable color is reported on the console and skipped rather than crashing.
+
+```jsonc
+{
+  "ui_scale": 1.15,                              // scales every text size at once
+  "theme_overrides":       { "BTN_ON": "#FF9500" },   // both themes
+  "theme_overrides_dark":  { "BG": "#000000" },       // dark only
+  "theme_overrides_light": { "BG": "#FFFFFF" },       // light only
+  "kiosk_overrides":       { "accent": "#00E5FF" }    // full-screen weather
+}
+```
+
+**Color keys** (all optional): `BG`, `HEADER_BG`, `CARD_OFF`, `CARD_ON`,
+`CARD_TARGET`, `BTN_ON`, `BTN_OFF`, `BTN_EDIT`, `TEXT`, `TEXT_ON`, `SUBTEXT`,
+`ERROR`.
+
+**Kiosk keys**: `text`, `sub`, `accent`, `card`. The kiosk's sky gradient, sun
+arc and precipitation stay code-driven — they're computed from live weather
+rather than picked.
+
+**Color formats**: `"#RRGGBB"`, `"#RRGGBBAA"`, `[255, 149, 0]`, or
+`[1.0, 0.58, 0.0, 1.0]`.
+
+`ui_scale` accepts 0.5–2.0 and works because Kivy resolves every `sp` size
+through a single global factor — one value retunes all text without touching
+any layout code. Layout heights are still fixed pixels, so large values will
+eventually crowd the 800×480 panel; around 1.2 is the practical ceiling.
 
 ---
 
@@ -403,6 +441,11 @@ git push origin v0.2.0
 ```
 
 ### Changelog
+
+## [0.7.2] - 2026-09-19
+### Added
+- **Appearance overrides in `hue_settings.json`** — retint any of the 12 palette colors (globally or per theme) and the Weather Kiosk's four surface colors without editing code. Accepts `#RRGGBB`, `#RRGGBBAA`, 0–255 lists and 0–1 lists; unknown keys and bad values are reported and skipped.
+- **`ui_scale`** — one value (0.5–2.0) scales every text size in the app, via Kivy's global `sp` factor, with no layout code changes.
 
 ## [0.7.1] - 2026-09-19
 ### Fixed

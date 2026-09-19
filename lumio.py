@@ -48,6 +48,7 @@ from theme import (
     C, set_theme, PALETTE_DARK, PALETTE_LIGHT,
     CARD_COLS, CARD_SPACING, CARD_HEIGHT, REFRESH_INTERVAL,
     load_settings, save_settings, rooms_ordered,
+    resolve_palette, apply_ui_scale,
 )
 from lumio_api import HueAPI
 from lumio_log import (
@@ -59,7 +60,7 @@ from lumio_brightness import set_brightness, get_brightness
 from lumio_weather import _fetch_weather, _resolve_location
 from ui_cards import RoomCard
 from ui_panels import SettingsPopup, WeatherModal, HeaderBar
-from ui_weather_kiosk import WeatherKiosk
+from ui_weather_kiosk import WeatherKiosk, apply_kiosk_overrides
 
 
 # ── RoomGrid ──────────────────────────────────────────────────────────────────
@@ -83,7 +84,7 @@ class RoomGrid(BoxLayout):
         self._settings     = load_settings()
         self._dark_mode    = self._settings.get("dark_mode", False)
 
-        set_theme(PALETTE_DARK if self._dark_mode else PALETTE_LIGHT)
+        set_theme(self._palette())
         Window.clearcolor = C.BG
 
         self._all_rooms       = []   # all (gid, group) from last fetch
@@ -141,9 +142,14 @@ class RoomGrid(BoxLayout):
 
     # ── theme ─────────────────────────────────────────────────────────────────
 
+    def _palette(self) -> dict:
+        """Built-in palette for the current mode, plus any user overrides."""
+        base = PALETTE_DARK if self._dark_mode else PALETTE_LIGHT
+        return resolve_palette(base, self._settings, self._dark_mode)
+
     def _toggle_theme(self):
         self._dark_mode = not self._dark_mode
-        set_theme(PALETTE_DARK if self._dark_mode else PALETTE_LIGHT)
+        set_theme(self._palette())
         self._settings["dark_mode"] = self._dark_mode
         threading.Thread(target=save_settings, args=(self._settings,), daemon=True).start()
         self._refresh_colors()
@@ -531,6 +537,8 @@ class LumioApp(App):
         cfg = load_settings()
         init_logging(cfg)
         log_system("app_start")
+        apply_ui_scale(cfg)        # before any widget is built
+        apply_kiosk_overrides(cfg)
         Window.clearcolor = C.BG
         try:
             api = HueAPI()

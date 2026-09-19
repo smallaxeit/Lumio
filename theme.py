@@ -88,6 +88,76 @@ def set_theme(palette: dict) -> None:
     C.SUBTEXT     = palette['SUBTEXT']
     C.ERROR       = palette['ERROR']
 
+# ── Palette overrides & UI scale ───────────────────────────────────────────────
+# Deliberately additive: every existing color name still works, so no call site
+# had to change. Tweaks live in hue_settings.json, not in code.
+
+def _parse_color(value):
+    """Accept '#RRGGBB', '#RRGGBBAA', or an [r,g,b(,a)] list in 0–1 or 0–255."""
+    if isinstance(value, str):
+        s = value.strip().lstrip('#')
+        if len(s) in (6, 8):
+            try:
+                parts = [int(s[i:i + 2], 16) / 255 for i in range(0, len(s), 2)]
+            except ValueError:
+                raise ValueError(f"bad hex color: {value!r}")
+            return tuple(parts) if len(parts) == 4 else tuple(parts) + (1.0,)
+        raise ValueError(f"bad hex color: {value!r}")
+    if isinstance(value, (list, tuple)) and len(value) in (3, 4):
+        try:
+            parts = [float(v) for v in value]
+        except (TypeError, ValueError):
+            raise ValueError(f"bad color list: {value!r}")
+        if any(v > 1.0 for v in parts[:3]):          # 0–255 form
+            parts = [v / 255 for v in parts[:3]] + parts[3:]
+        return tuple(parts) if len(parts) == 4 else tuple(parts) + (1.0,)
+    raise ValueError(f"bad color value: {value!r}")
+
+
+def resolve_palette(base: dict, settings: dict, dark: bool) -> dict:
+    """Return `base` with the user's overrides from hue_settings.json applied.
+
+    `theme_overrides` applies to both modes; `theme_overrides_dark` and
+    `theme_overrides_light` refine one. A bad key or value is reported and
+    skipped — a typo in a settings file must not take the kiosk down.
+    """
+    palette = dict(base)
+    mode_key = "theme_overrides_dark" if dark else "theme_overrides_light"
+    for layer in (settings.get("theme_overrides"), settings.get(mode_key)):
+        if not isinstance(layer, dict):
+            continue
+        for key, value in layer.items():
+            if key not in palette:
+                print(f"[theme] unknown color key ignored: {key}")
+                continue
+            try:
+                palette[key] = _parse_color(value)
+            except ValueError as exc:
+                print(f"[theme] {key}: {exc}")
+    return palette
+
+
+def apply_ui_scale(settings: dict) -> None:
+    """Scale every 'sp' text size in the app at once.
+
+    Kivy resolves sp through Metrics.fontscale, so one value retunes all 64
+    font sizes without touching a call site. Must run before any widget is
+    built — LumioApp.build() calls it.
+    """
+    raw = settings.get("ui_scale", 1.0)
+    try:
+        scale = float(raw)
+    except (TypeError, ValueError):
+        print(f"[theme] ui_scale not a number: {raw!r}")
+        return
+    if not 0.5 <= scale <= 2.0:
+        print(f"[theme] ui_scale {scale} out of range 0.5–2.0, ignored")
+        return
+    if scale != 1.0:
+        from kivy.metrics import Metrics
+        Metrics.fontscale = scale
+
+
 # ── Symbol font ────────────────────────────────────────────────────────────────
 
 def _find_symbol_font() -> str:
