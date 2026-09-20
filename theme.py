@@ -114,6 +114,63 @@ def _parse_color(value):
     raise ValueError(f"bad color value: {value!r}")
 
 
+THEMES_DIR = os.path.join(_DIR, "themes")
+
+_OVERRIDE_KEYS = ("theme_overrides", "theme_overrides_dark",
+                  "theme_overrides_light", "kiosk_overrides")
+
+
+def list_themes() -> list:
+    """Names of the presets in themes/ (the filename without .json)."""
+    try:
+        return sorted(f[:-5] for f in os.listdir(THEMES_DIR) if f.endswith(".json"))
+    except OSError:
+        return []
+
+
+def load_theme_preset(name) -> dict:
+    """Load one preset by name. Missing or malformed presets yield {}."""
+    if not name or not isinstance(name, str):
+        return {}
+    if os.sep in name or (os.altsep and os.altsep in name) or name.startswith("."):
+        print(f"[theme] invalid theme name: {name!r}")
+        return {}
+    path = os.path.join(THEMES_DIR, name + ".json")
+    if not os.path.exists(path):
+        available = ", ".join(list_themes()) or "none found"
+        print(f"[theme] no such theme: {name!r} (available: {available})")
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        print(f"[theme] could not read {name}.json: {exc}")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def effective_settings(settings: dict) -> dict:
+    """Settings with the named preset filled in underneath the user's own keys.
+
+    Precedence, lowest first: built-in palette, the preset named by `theme`,
+    then whatever is written directly in hue_settings.json — so picking a
+    preset never costs you a hand-tweaked color.
+    """
+    preset = load_theme_preset(settings.get("theme"))
+    if not preset:
+        return settings
+    merged = dict(settings)
+    for key in _OVERRIDE_KEYS:
+        from_preset = preset.get(key)
+        from_user   = settings.get(key)
+        if isinstance(from_preset, dict):
+            merged[key] = {**from_preset,
+                           **(from_user if isinstance(from_user, dict) else {})}
+    if "ui_scale" not in settings and "ui_scale" in preset:
+        merged["ui_scale"] = preset["ui_scale"]
+    return merged
+
+
 def resolve_palette(base: dict, settings: dict, dark: bool) -> dict:
     """Return `base` with the user's overrides from hue_settings.json applied.
 

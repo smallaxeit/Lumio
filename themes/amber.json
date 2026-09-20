@@ -1,0 +1,41 @@
+{
+  "_name": "Amber",
+  "_description": "Warm charcoal and amber. Easy on the eyes at night.",
+
+  "theme_overrides": {
+    "BTN_EDIT": "#F59E0B"
+  },
+
+  "theme_overrides_dark": {
+    "BG": "#12100C",
+    "HEADER_BG": "#1A1711",
+    "CARD_OFF": "#1E1A13",
+    "CARD_ON": "#3A2A12",
+    "BTN_ON": "#F59E0B",
+    "BTN_OFF": "#2A2419",
+    "TEXT": "#F5EFE2",
+    "TEXT_ON": "#FFC861",
+    "SUBTEXT": "#8A7C63",
+    "ERROR": "#EF5350"
+  },
+
+  "theme_overrides_light": {
+    "BG": "#FAF6EF",
+    "HEADER_BG": "#FFFDF8",
+    "CARD_OFF": "#FFFFFF",
+    "CARD_ON": "#FDEBCB",
+    "BTN_ON": "#D97706",
+    "BTN_OFF": "#A39684",
+    "TEXT": "#1F1B14",
+    "TEXT_ON": "#1F1B14",
+    "SUBTEXT": "#6B6151",
+    "ERROR": "#C0392B"
+  },
+
+  "kiosk_overrides": {
+    "accent": "#F59E0B",
+    "text": "#F5EFE2",
+    "sub": "#8A7C63",
+    "card": "#1E1A13E0"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "_name": "Paper",
+  "_description": "Warm off-white with dark ink and a muted green accent. Built for a bright room.",
+
+  "theme_overrides": {
+    "BTN_EDIT": "#2F6F4E"
+  },
+
+  "theme_overrides_light": {
+    "BG": "#F7F6F3",
+    "HEADER_BG": "#FFFFFF",
+    "CARD_OFF": "#FFFFFF",
+    "CARD_ON": "#E8E6DF",
+    "BTN_ON": "#2F6F4E",
+    "BTN_OFF": "#A8A49B",
+    "TEXT": "#1A1917",
+    "TEXT_ON": "#1A1917",
+    "SUBTEXT": "#6E6A62",
+    "ERROR": "#A8342B"
+  },
+
+  "theme_overrides_dark": {
+    "BG": "#171614",
+    "HEADER_BG": "#1E1D1A",
+    "CARD_OFF": "#211F1C",
+    "CARD_ON": "#2C332C",
+    "BTN_ON": "#5FA37C",
+    "BTN_OFF": "#2A2825",
+    "TEXT": "#EDEAE3",
+    "TEXT_ON": "#9FD9B8",
+    "SUBTEXT": "#7C776D",
+    "ERROR": "#E06C63"
+  },
+
+  "kiosk_overrides": {
+    "accent": "#5FA37C",
+    "text": "#EDEAE3",
+    "sub": "#7C776D",
+    "card": "#211F1CE0"
+  }
+}

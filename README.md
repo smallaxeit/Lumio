@@ -1,6 +1,6 @@
 # Lumio
 
-[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.7.2-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.7.2) ![Date](https://img.shields.io/badge/updated-2026--09--19-lightgrey)
+[![GitHub](https://img.shields.io/badge/GitHub-smallaxeit%2Flumio-181717?logo=github)](https://github.com/smallaxeit/lumio) [![Version](https://img.shields.io/badge/version-v0.7.3-blue)](https://github.com/smallaxeit/lumio/releases/tag/v0.7.3) ![Date](https://img.shields.io/badge/updated-2026--09--19-lightgrey)
 
 A touchscreen Philips Hue controller built with Python and Kivy, designed for a Raspberry Pi 4 with the official 7" display. Runs as a local full-screen panel — no cloud, no browser, no subscription.
 
@@ -174,6 +174,7 @@ All settings are stored in `hue_settings.json` (auto-created, never committed):
 | `username` | `hue_discovery.py` | Hue API key |
 | `hidden_rooms` | Settings popup | Room IDs hidden from the grid |
 | `exempt_rooms` | Settings popup | Room IDs excluded from the All Off button |
+| `theme` | Hand-edited | Preset name from `themes/` (`midnight`, `amber`, `nord`, `paper`) |
 | `ui_scale` | Hand-edited | Global text scale, 0.5–2.0 (default 1.0) |
 | `theme_overrides` | Hand-edited | Palette overrides applied to both themes |
 | `theme_overrides_dark` | Hand-edited | Palette overrides for dark mode only |
@@ -194,12 +195,45 @@ All settings are stored in `hue_settings.json` (auto-created, never committed):
 
 See `hue_settings.example.json` for the expected structure.
 
+### Themes
+
+Four presets ship in `themes/`. Pick one by name:
+
+```jsonc
+{ "theme": "midnight" }
+```
+
+| Preset | Look |
+|---|---|
+| `midnight` | Deep blue-black, cyan accent. Cool and high-contrast. |
+| `amber` | Warm charcoal and amber. Easy on the eyes at night. |
+| `nord` | Muted arctic blue-greys. Low contrast, comfortable all day. |
+| `paper` | Warm off-white, dark ink, muted green. Built for a bright room. |
+
+Each preset defines **both** light and dark variants, so the theme toggle keeps
+working and keeps the preset's character. Leave `theme` empty for the built-in
+palette.
+
+To add your own, drop a `.json` file in `themes/` using the same structure and
+reference it by filename. Anything you leave out falls back to the built-in
+value.
+
 ### Appearance tweaks
 
 The built-in light and dark palettes live in `theme.py`. Rather than editing
 them, override individual colors from `hue_settings.json` — the app falls back
 to the built-in value for anything you leave out, and an unknown key or an
 unparseable color is reported on the console and skipped rather than crashing.
+
+Precedence is **built-in palette → preset → your own keys**, so picking a preset
+never costs you a hand-tweaked color:
+
+```jsonc
+{
+  "theme": "nord",
+  "theme_overrides": { "BTN_ON": "#FF9500" }   // nord, but with an amber button
+}
+```
 
 ```jsonc
 {
@@ -387,6 +421,7 @@ lumio/
 ├── lumio_weather.py        # Open-Meteo weather fetching and IP geolocation
 ├── lumio_brightness.py     # Pi backlight brightness read/write
 ├── hue_discovery.py        # Bridge discovery and authentication (one-time setup)
+├── themes/                 # Colour presets — midnight, amber, nord, paper
 ├── assets/
 │   ├── weather/            # Meteocons PNG icons (MIT) — mapped to WMO weather codes
 │   └── screenshots/        # README screenshots
@@ -441,6 +476,11 @@ git push origin v0.2.0
 ```
 
 ### Changelog
+
+## [0.7.3] - 2026-09-19
+### Added
+- **Theme presets** in `themes/` — `midnight`, `amber`, `nord`, `paper`. Select with `"theme": "<name>"` in `hue_settings.json`. Each defines both light and dark variants so the theme toggle keeps working. Drop a `.json` file in `themes/` to add your own.
+- Precedence is built-in palette → preset → your own keys, so choosing a preset never overwrites a hand-tweaked color.
 
 ## [0.7.2] - 2026-09-19
 ### Added

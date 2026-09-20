@@ -48,7 +48,7 @@ from theme import (
     C, set_theme, PALETTE_DARK, PALETTE_LIGHT,
     CARD_COLS, CARD_SPACING, CARD_HEIGHT, REFRESH_INTERVAL,
     load_settings, save_settings, rooms_ordered,
-    resolve_palette, apply_ui_scale,
+    resolve_palette, apply_ui_scale, effective_settings,
 )
 from lumio_api import HueAPI
 from lumio_log import (
@@ -82,6 +82,9 @@ class RoomGrid(BoxLayout):
         self._busy         = True
         self._edit_mode    = False
         self._settings     = load_settings()
+        # Appearance only: the named preset merged under the user's own keys.
+        # Saves always write self._settings, so a preset is never baked in.
+        self._theme_cfg    = effective_settings(self._settings)
         self._dark_mode    = self._settings.get("dark_mode", False)
 
         set_theme(self._palette())
@@ -145,7 +148,7 @@ class RoomGrid(BoxLayout):
     def _palette(self) -> dict:
         """Built-in palette for the current mode, plus any user overrides."""
         base = PALETTE_DARK if self._dark_mode else PALETTE_LIGHT
-        return resolve_palette(base, self._settings, self._dark_mode)
+        return resolve_palette(base, self._theme_cfg, self._dark_mode)
 
     def _toggle_theme(self):
         self._dark_mode = not self._dark_mode
@@ -537,8 +540,9 @@ class LumioApp(App):
         cfg = load_settings()
         init_logging(cfg)
         log_system("app_start")
-        apply_ui_scale(cfg)        # before any widget is built
-        apply_kiosk_overrides(cfg)
+        theme_cfg = effective_settings(cfg)
+        apply_ui_scale(theme_cfg)        # before any widget is built
+        apply_kiosk_overrides(theme_cfg)
         Window.clearcolor = C.BG
         try:
             api = HueAPI()

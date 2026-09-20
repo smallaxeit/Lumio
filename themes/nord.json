@@ -1,0 +1,41 @@
+{
+  "_name": "Nord",
+  "_description": "Muted arctic blue-greys from the Nord palette. Low contrast, easy to look at all day.",
+
+  "theme_overrides": {
+    "BTN_EDIT": "#B48EAD"
+  },
+
+  "theme_overrides_dark": {
+    "BG": "#2E3440",
+    "HEADER_BG": "#3B4252",
+    "CARD_OFF": "#3B4252",
+    "CARD_ON": "#434C5E",
+    "BTN_ON": "#88C0D0",
+    "BTN_OFF": "#4C566A",
+    "TEXT": "#ECEFF4",
+    "TEXT_ON": "#8FBCBB",
+    "SUBTEXT": "#7A869C",
+    "ERROR": "#BF616A"
+  },
+
+  "theme_overrides_light": {
+    "BG": "#ECEFF4",
+    "HEADER_BG": "#E5E9F0",
+    "CARD_OFF": "#FFFFFF",
+    "CARD_ON": "#D8DEE9",
+    "BTN_ON": "#5E81AC",
+    "BTN_OFF": "#97A0B0",
+    "TEXT": "#2E3440",
+    "TEXT_ON": "#2E3440",
+    "SUBTEXT": "#4C566A",
+    "ERROR": "#BF616A"
+  },
+
+  "kiosk_overrides": {
+    "accent": "#EBCB8B",
+    "text": "#ECEFF4",
+    "sub": "#7A869C",
+    "card": "#3B4252E0"
+  }
+}

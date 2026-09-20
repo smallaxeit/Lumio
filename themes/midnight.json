@@ -1,0 +1,41 @@
+{
+  "_name": "Midnight",
+  "_description": "Deep blue-black with a cyan accent. Cool and high-contrast.",
+
+  "theme_overrides": {
+    "BTN_EDIT": "#22D3EE"
+  },
+
+  "theme_overrides_dark": {
+    "BG": "#06080F",
+    "HEADER_BG": "#0B0E1A",
+    "CARD_OFF": "#101526",
+    "CARD_ON": "#12294A",
+    "BTN_ON": "#22D3EE",
+    "BTN_OFF": "#1C2236",
+    "TEXT": "#E6ECFF",
+    "TEXT_ON": "#7DE3F4",
+    "SUBTEXT": "#6B7699",
+    "ERROR": "#FF5C6C"
+  },
+
+  "theme_overrides_light": {
+    "BG": "#EEF1F8",
+    "HEADER_BG": "#FFFFFF",
+    "CARD_OFF": "#FFFFFF",
+    "CARD_ON": "#D8F1F7",
+    "BTN_ON": "#0891B2",
+    "BTN_OFF": "#8A93A8",
+    "TEXT": "#0F1524",
+    "TEXT_ON": "#0F1524",
+    "SUBTEXT": "#5A6480",
+    "ERROR": "#D92D3C"
+  },
+
+  "kiosk_overrides": {
+    "accent": "#22D3EE",
+    "text": "#E6ECFF",
+    "sub": "#6B7699",
+    "card": "#0F1730E0"
+  }
+}
